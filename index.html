@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Career Intel</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="logo">&#9670; Career Intel</div>
+    <nav>
+      <button class="tabBtn active" data-tab="dashboard">Dashboard</button>
+      <button class="tabBtn" data-tab="jobs">Jobs</button>
+      <button class="tabBtn" data-tab="discover">Discover</button>
+      <button class="tabBtn" data-tab="worth">My Worth</button>
+      <button class="tabBtn" data-tab="tailor">Tailor Resume</button>
+      <button class="tabBtn" data-tab="tracker">Tracker</button>
+      <button class="tabBtn" data-tab="profile">Profile</button>
+    </nav>
+  </header>
+
+  <div class="content">
+
+    <!-- ====================================================
+         DASHBOARD
+    ===================================================== -->
+    <div id="tab-dashboard" class="tabPanel visible">
+      <div class="kpi-grid" id="dashKpis"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <div class="card">
+          <div class="card-header"><span class="card-title">Top Matching Jobs</span></div>
+          <div id="dashTopJobs"></div>
+        </div>
+        <div class="card">
+          <div class="card-header"><span class="card-title">Skill Gap Summary</span></div>
+          <canvas id="skillGapChart" height="200"></canvas>
+        </div>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <div class="card-header"><span class="card-title">AI Insights</span></div>
+        <div id="dashInsights" class="insight-list"></div>
+      </div>
+    </div>
+
+    <!-- ====================================================
+         JOBS
+    ===================================================== -->
+    <div id="tab-jobs" class="tabPanel">
+      <div class="toolbar">
+        <button class="btn btn-primary" id="btnSync">&#8635; Sync Jobs</button>
+        <input type="text" id="jobSearch" placeholder="Search title, company…" style="flex:1;max-width:280px" />
+        <select id="jobSourceFilter">
+          <option value="">All sources</option>
+          <option value="usajobs">USAJOBS</option>
+          <option value="greenhouse">Greenhouse</option>
+          <option value="lever">Lever</option>
+          <option value="ashby">Ashby</option>
+        </select>
+        <select id="jobSectorFilter">
+          <option value="">All sectors</option>
+          <option value="tech">Tech</option>
+          <option value="government">Government</option>
+          <option value="product">Product</option>
+          <option value="sales">Sales</option>
+        </select>
+        <select id="jobSortSelect">
+          <option value="score">Sort: Best match</option>
+          <option value="recent">Sort: Most recent</option>
+          <option value="salary">Sort: Salary</option>
+        </select>
+        <span id="jobCount" style="color:var(--muted);font-size:12px;white-space:nowrap"></span>
+      </div>
+      <div class="card" style="padding:0">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Role</th>
+                <th>Company</th>
+                <th>Location</th>
+                <th>Salary</th>
+                <th>Source</th>
+                <th>Fit Score</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="jobsTableBody"></tbody>
+          </table>
+        </div>
+        <div id="jobsEmpty" class="empty-state hidden">
+          <strong>No jobs yet</strong>
+          <p>Click "Sync Jobs" to pull from your configured sources.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ====================================================
+         DISCOVER
+    ===================================================== -->
+    <div id="tab-discover" class="tabPanel">
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:16px">
+        <h2 class="section-title" style="margin:0">Career Discovery</h2>
+        <button class="btn btn-primary btn-sm" id="btnDiscover">&#10024; Analyze</button>
+      </div>
+
+      <div class="kpi-grid" id="discoverKpis"></div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+        <div class="card">
+          <div class="card-header"><span class="card-title">Adjacent Roles You Qualify For</span></div>
+          <div id="adjacentRolesList"></div>
+        </div>
+        <div class="card">
+          <div class="card-header"><span class="card-title">Sector Heatmap</span></div>
+          <canvas id="sectorChart" height="200"></canvas>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Career Network</span>
+          <span style="font-size:12px;color:var(--muted)">Your role at center — sized by fit</span>
+        </div>
+        <canvas id="discoveryCanvas"></canvas>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px">
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Top Skill Gaps</span>
+            <div style="display:flex;gap:8px;align-items:center">
+              <select id="whatIfSkill" style="max-width:160px;font-size:12px">
+                <option value="">What if I learn…</option>
+              </select>
+              <button class="btn btn-sm btn-secondary" id="btnWhatIf">Simulate</button>
+            </div>
+          </div>
+          <div id="skillGapList"></div>
+        </div>
+        <div class="card">
+          <div class="card-header"><span class="card-title">Career Pivot Paths</span></div>
+          <div id="pivotPathsList"></div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <div class="card-header"><span class="card-title">Career Insights</span></div>
+        <div id="discoverInsights" class="insight-list"></div>
+      </div>
+    </div>
+
+    <!-- ====================================================
+         WHAT'S MY WORTH
+    ===================================================== -->
+    <div id="tab-worth" class="tabPanel">
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:16px">
+        <h2 class="section-title" style="margin:0">What's My Worth?</h2>
+        <button class="btn btn-primary btn-sm" id="btnAnalyzeWorth">&#128200; Analyze</button>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><span class="card-title">Market Context (optional)</span></div>
+        <p style="font-size:12px;color:var(--muted);margin-bottom:10px">Paste salary data from Levels.fyi, Glassdoor, LinkedIn Salary, etc. The AI will use this as additional context.</p>
+        <textarea id="marketContext" rows="4" placeholder="e.g. 'Engineering Manager at Google Detroit: $220k base, 20% bonus. At Ford: $190k…'"></textarea>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><span class="card-title">What-If Scenarios</span></div>
+        <div id="worthScenarioList" style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px"></div>
+        <button class="btn btn-secondary btn-sm" id="btnAddScenario">+ Add Scenario</button>
+      </div>
+
+      <div id="worthResults" class="hidden">
+        <div class="card">
+          <div class="card-header"><span class="card-title">Market Value Estimate</span></div>
+          <div id="worthSummaryText" style="font-size:13px;color:var(--muted);margin-bottom:14px"></div>
+          <div class="worth-bands" id="worthBands"></div>
+          <div style="display:flex;gap:16px;align-items:center">
+            <span style="font-size:13px">Market percentile:</span>
+            <div style="flex:1;max-width:240px">
+              <div class="progress-bar-wrap"><div class="progress-bar" id="worthPercentileBar" style="width:0%"></div></div>
+            </div>
+            <span id="worthPercentileLabel" style="font-size:13px;font-weight:700;color:var(--accent)"></span>
+            <span id="worthUnderpaidBadge" class="score-pill"></span>
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+          <div class="card">
+            <div class="card-header"><span class="card-title">Skills in Highest Demand</span></div>
+            <div id="worthSkills" class="tags" style="margin-top:4px"></div>
+          </div>
+          <div class="card">
+            <div class="card-header"><span class="card-title">Sector Premiums</span></div>
+            <canvas id="sectorPremiumChart" height="180"></canvas>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><span class="card-title">What-If Results</span></div>
+          <div id="worthScenarioResults"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><span class="card-title">Career ROI</span></div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Action</th>
+                  <th>Est. Cost</th>
+                  <th>Time</th>
+                  <th>Salary Increase</th>
+                  <th>Payback Period</th>
+                </tr>
+              </thead>
+              <tbody id="careerRoiTable"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ====================================================
+         RESUME TAILOR
+    ===================================================== -->
+    <div id="tab-tailor" class="tabPanel">
+      <h2 class="section-title">Resume Tailor</h2>
+
+      <div class="card">
+        <div class="card-header"><span class="card-title">Select Target Job</span></div>
+        <div style="display:flex;gap:10px;align-items:center">
+          <select id="tailorJobSelect" style="flex:1;max-width:480px">
+            <option value="">— choose a job —</option>
+          </select>
+          <button class="btn btn-primary" id="btnTailorResume">&#9997; Tailor Resume</button>
+        </div>
+      </div>
+
+      <div id="tailorResults" class="hidden">
+        <div class="split-pane">
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title">Original Profile Summary</span>
+            </div>
+            <div id="tailorOriginalSummary" style="font-size:13px;line-height:1.6;color:var(--muted)"></div>
+          </div>
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title">Tailored Summary</span>
+              <button class="btn btn-secondary btn-sm" id="btnCopySummary">Copy</button>
+            </div>
+            <div id="tailorNewSummary" style="font-size:13px;line-height:1.6"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Tailored Bullets by Role</span>
+            <button class="btn btn-secondary btn-sm" id="btnCopyBullets">Copy All</button>
+          </div>
+          <div id="tailorBullets"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">ATS Keywords Added</span>
+          </div>
+          <div id="tailorKeywords" class="tags"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Cover Letter</span>
+            <button class="btn btn-secondary btn-sm" id="btnCopyCover">Copy</button>
+          </div>
+          <pre id="tailorCoverLetter" style="white-space:pre-wrap;font-family:inherit;font-size:13px;line-height:1.6"></pre>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><span class="card-title">Application Tips</span></div>
+          <div id="tailorTips" class="insight-list"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ====================================================
+         TRACKER
+    ===================================================== -->
+    <div id="tab-tracker" class="tabPanel">
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:16px">
+        <h2 class="section-title" style="margin:0">Application Tracker</h2>
+        <button class="btn btn-primary btn-sm" id="btnAddApplication">+ Add Application</button>
+      </div>
+
+      <div class="kpi-grid" id="trackerKpis"></div>
+
+      <div class="card" style="margin-bottom:16px;padding:16px">
+        <canvas id="trackerFunnelChart" height="120"></canvas>
+      </div>
+
+      <div class="kanban" id="trackerKanban"></div>
+
+      <!-- Add/edit modal -->
+      <div id="appModal" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:200;display:flex;align-items:center;justify-content:center">
+        <div class="card" style="width:520px;max-width:95vw;max-height:90vh;overflow-y:auto">
+          <div class="card-header">
+            <span class="card-title" id="appModalTitle">Add Application</span>
+            <button class="btn btn-secondary btn-sm" id="btnCloseAppModal">✕</button>
+          </div>
+          <div class="form-grid" style="margin-bottom:14px">
+            <div class="form-group">
+              <label>Job Title</label>
+              <input type="text" id="appTitle" placeholder="Engineering Manager" />
+            </div>
+            <div class="form-group">
+              <label>Company</label>
+              <input type="text" id="appCompany" placeholder="Acme Corp" />
+            </div>
+            <div class="form-group">
+              <label>Status</label>
+              <select id="appStatus">
+                <option value="Saved">Saved</option>
+                <option value="Applied">Applied</option>
+                <option value="Phone Screen">Phone Screen</option>
+                <option value="Interview">Interview</option>
+                <option value="Offer">Offer</option>
+                <option value="Rejected">Rejected</option>
+                <option value="Withdrawn">Withdrawn</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Follow-up Date</label>
+              <input type="text" id="appFollowup" placeholder="YYYY-MM-DD" />
+            </div>
+            <div class="form-group" style="grid-column:1/-1">
+              <label>Job URL</label>
+              <input type="text" id="appUrl" placeholder="https://…" />
+            </div>
+            <div class="form-group" style="grid-column:1/-1">
+              <label>Notes</label>
+              <textarea id="appNotes" rows="3" placeholder="Recruiter name, interview notes…"></textarea>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;justify-content:flex-end">
+            <button class="btn btn-secondary" id="btnCancelAppModal">Cancel</button>
+            <button class="btn btn-primary" id="btnSaveApp">Save</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ====================================================
+         PROFILE
+    ===================================================== -->
+    <div id="tab-profile" class="tabPanel">
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:16px">
+        <h2 class="section-title" style="margin:0">My Profile</h2>
+        <button class="btn btn-primary btn-sm" id="btnSaveProfile">&#10003; Save Profile</button>
+      </div>
+
+      <div id="profileSaveAlert" class="hidden"></div>
+
+      <div class="card">
+        <div class="card-header"><span class="card-title">Identity</span></div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Full Name</label>
+            <input type="text" id="profName" placeholder="Jane Smith" />
+          </div>
+          <div class="form-group">
+            <label>Current Title / Headline</label>
+            <input type="text" id="profHeadline" placeholder="Engineering Group Manager" />
+          </div>
+          <div class="form-group">
+            <label>Location</label>
+            <input type="text" id="profLocation" placeholder="Detroit, MI" />
+          </div>
+          <div class="form-group">
+            <label>Email</label>
+            <input type="email" id="profEmail" placeholder="jane@example.com" />
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><span class="card-title">Master Resume</span></div>
+        <p style="font-size:12px;color:var(--muted);margin-bottom:10px">Paste your full resume here. The AI reads this for skill extraction and resume tailoring.</p>
+        <textarea id="profResume" rows="12" placeholder="Paste your full resume text…"></textarea>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><span class="card-title">Skills</span></div>
+        <div class="tags" id="skillTags" style="margin-bottom:10px"></div>
+        <div class="tag-input-wrap">
+          <input type="text" id="skillInput" placeholder="Add a skill and press Enter" style="max-width:320px" />
+          <button class="btn btn-secondary btn-sm" id="btnExtractSkills">&#10024; Extract from Resume</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><span class="card-title">Work History</span></div>
+        <div id="workHistoryList" style="margin-bottom:12px"></div>
+        <button class="btn btn-secondary btn-sm" id="btnAddWork">+ Add Role</button>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><span class="card-title">Compensation</span></div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Current Base ($)</label>
+            <input type="number" id="profCurrentBase" placeholder="185000" />
+          </div>
+          <div class="form-group">
+            <label>Current Bonus (%)</label>
+            <input type="number" id="profCurrentBonus" placeholder="15" />
+          </div>
+          <div class="form-group">
+            <label>401k Match (%)</label>
+            <input type="number" id="prof401k" placeholder="10" />
+          </div>
+          <div class="form-group">
+            <label>Target Base ($)</label>
+            <input type="number" id="profTargetBase" placeholder="220000" />
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><span class="card-title">Preferences</span></div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Target Titles (comma-separated)</label>
+            <input type="text" id="profTargetTitles" placeholder="Engineering Manager, Director of Engineering…" />
+          </div>
+          <div class="form-group">
+            <label>Target Sectors (comma-separated)</label>
+            <input type="text" id="profTargetSectors" placeholder="tech, finance, healthcare…" />
+          </div>
+          <div class="form-group">
+            <label>Work Location Preference</label>
+            <select id="profRemotePref">
+              <option value="hybrid">Hybrid</option>
+              <option value="remote">Fully Remote</option>
+              <option value="onsite">On-site</option>
+              <option value="any">No preference</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Years of Experience</label>
+            <input type="number" id="profYOE" placeholder="15" />
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><span class="card-title">Certifications &amp; Education</span></div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Certifications (comma-separated)</label>
+            <input type="text" id="profCerts" placeholder="PMP, AWS Solutions Architect…" />
+          </div>
+          <div class="form-group">
+            <label>Highest Education</label>
+            <input type="text" id="profEducation" placeholder="B.S. Computer Science, University of Michigan" />
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /content -->
+</div><!-- /app -->
+
+<script src="app.js"></script>
+</body>
+</html>

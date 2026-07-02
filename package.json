@@ -1,0 +1,17 @@
+{
+  "name": "career-intel",
+  "version": "1.0.0",
+  "description": "Personal career intelligence app — job discovery, skill graph, market value, resume tailoring",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "node-cron": "^3.0.3",
+    "node-fetch": "^2.7.0",
+    "openai": "^4.52.7"
+  }
+}

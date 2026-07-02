@@ -1,0 +1,36 @@
+{
+  "sync_interval_hours": 4,
+  "sources": {
+    "usajobs": true,
+    "greenhouse": true,
+    "lever": true,
+    "ashby": true
+  },
+  "usajobs": {
+    "keywords": ["Engineering Manager", "Technical Program Manager", "Platform Engineering", "DevOps Manager", "Director of Engineering"],
+    "location": "Detroit, MI",
+    "radius_miles": 50,
+    "include_remote": true,
+    "results_per_page": 50
+  },
+  "greenhouse_companies": [
+    "stripe",
+    "airbnb",
+    "coinbase",
+    "brex",
+    "figma"
+  ],
+  "lever_companies": [
+    "netflix",
+    "reddit",
+    "robinhood",
+    "anduril"
+  ],
+  "ashby_companies": [
+    "anthropic",
+    "openai",
+    "linear",
+    "vercel",
+    "notion"
+  ]
+}

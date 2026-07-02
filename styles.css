@@ -1,0 +1,384 @@
+/* ============================================================
+   Career Intel — Global Styles
+   ============================================================ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #0f1117;
+  --surface: #1a1d2e;
+  --surface2: #252840;
+  --border: #2e3154;
+  --accent: #6c8cff;
+  --accent2: #a78bfa;
+  --green: #34d399;
+  --yellow: #fbbf24;
+  --red: #f87171;
+  --text: #e2e8f0;
+  --muted: #8892b0;
+  --radius: 10px;
+  --shadow: 0 4px 24px rgba(0,0,0,0.4);
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  min-height: 100vh;
+}
+
+/* ---- Layout ---- */
+#app { display: flex; flex-direction: column; min-height: 100vh; }
+
+header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  gap: 32px;
+  height: 56px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+header .logo {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+
+nav { display: flex; gap: 4px; flex: 1; }
+
+nav button {
+  background: none;
+  border: none;
+  color: var(--muted);
+  padding: 8px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+nav button:hover { background: var(--surface2); color: var(--text); }
+nav button.active { background: var(--surface2); color: var(--accent); }
+
+.content { flex: 1; padding: 24px; max-width: 1400px; width: 100%; margin: 0 auto; }
+
+.tabPanel { display: none; }
+.tabPanel.visible { display: block; }
+
+/* ---- Cards & Sections ---- */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  margin-bottom: 16px;
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.card-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.section-title {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 16px;
+  color: var(--text);
+}
+
+/* ---- KPI Grid ---- */
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.kpi {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  text-align: center;
+}
+.kpi-value {
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--accent);
+  line-height: 1.1;
+}
+.kpi-label {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* ---- Forms ---- */
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+}
+
+.form-group { display: flex; flex-direction: column; gap: 6px; }
+.form-group label { font-size: 12px; color: var(--muted); font-weight: 500; }
+
+input[type="text"],
+input[type="number"],
+input[type="email"],
+select,
+textarea {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 9px 12px;
+  font-size: 13px;
+  width: 100%;
+  transition: border-color 0.15s;
+  font-family: inherit;
+}
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+textarea { resize: vertical; min-height: 80px; }
+
+/* ---- Buttons ---- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 18px;
+  border-radius: 7px;
+  border: none;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:hover { opacity: 0.88; }
+.btn-secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+.btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
+.btn-sm { padding: 5px 12px; font-size: 12px; }
+.btn-danger { background: var(--red); color: #fff; }
+.btn-danger:hover { opacity: 0.85; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ---- Tables ---- */
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th {
+  text-align: left;
+  padding: 10px 12px;
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+td {
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: var(--surface2); }
+td a { color: var(--accent); text-decoration: none; }
+td a:hover { text-decoration: underline; }
+
+/* ---- Score Pills ---- */
+.score-pill {
+  display: inline-block;
+  padding: 3px 9px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.score-high { background: rgba(52,211,153,0.15); color: var(--green); }
+.score-mid  { background: rgba(251,191,36,0.15);  color: var(--yellow); }
+.score-low  { background: rgba(248,113,113,0.15);  color: var(--red); }
+
+/* ---- Source Badge ---- */
+.source-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.src-usajobs  { background: rgba(59,130,246,0.2); color: #60a5fa; }
+.src-greenhouse { background: rgba(52,211,153,0.15); color: var(--green); }
+.src-lever    { background: rgba(167,139,250,0.15); color: var(--accent2); }
+.src-ashby    { background: rgba(251,191,36,0.15);  color: var(--yellow); }
+
+/* ---- Tags ---- */
+.tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.tag {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 9px;
+  font-size: 12px;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.tag .remove {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+}
+.tag .remove:hover { color: var(--red); }
+.tag-input-wrap { display: flex; gap: 8px; align-items: center; }
+
+/* ---- Toolbar ---- */
+.toolbar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.toolbar input[type="text"],
+.toolbar select {
+  max-width: 220px;
+}
+
+/* ---- Split pane ---- */
+.split-pane {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+@media (max-width: 900px) {
+  .split-pane { grid-template-columns: 1fr; }
+  nav button { padding: 8px 10px; font-size: 12px; }
+}
+
+/* ---- Status kanban ---- */
+.kanban { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 8px; }
+.kanban-col {
+  flex: 0 0 200px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+}
+.kanban-col-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.kanban-card {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 10px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.kanban-card:hover { border-color: var(--accent); }
+.kanban-card-title { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+.kanban-card-sub { font-size: 11px; color: var(--muted); }
+
+/* ---- Worth report ---- */
+.worth-bands {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-bottom: 16px;
+}
+@media (max-width: 800px) { .worth-bands { grid-template-columns: 1fr 1fr; } }
+.worth-band {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  text-align: center;
+}
+.worth-band-label { font-size: 11px; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; }
+.worth-band-value { font-size: 22px; font-weight: 700; }
+.band-conservative { color: var(--muted); }
+.band-expected     { color: var(--accent); }
+.band-competitive  { color: var(--accent2); }
+.band-exceptional  { color: var(--green); }
+
+/* ---- Network graph ---- */
+#discoveryCanvas { width: 100%; height: 420px; background: var(--surface2); border-radius: var(--radius); display: block; }
+
+/* ---- Misc ---- */
+.empty-state {
+  text-align: center;
+  padding: 48px 24px;
+  color: var(--muted);
+}
+.empty-state p { margin-top: 8px; font-size: 13px; }
+
+.spinner {
+  display: inline-block;
+  width: 16px; height: 16px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.alert {
+  padding: 10px 14px;
+  border-radius: 7px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+.alert-success { background: rgba(52,211,153,0.1); border: 1px solid rgba(52,211,153,0.3); color: var(--green); }
+.alert-error   { background: rgba(248,113,113,0.1); border: 1px solid rgba(248,113,113,0.3); color: var(--red); }
+.alert-info    { background: rgba(108,140,255,0.1); border: 1px solid rgba(108,140,255,0.3); color: var(--accent); }
+
+.progress-bar-wrap { background: var(--surface2); border-radius: 20px; height: 6px; overflow: hidden; }
+.progress-bar { height: 100%; border-radius: 20px; background: var(--accent); transition: width 0.4s; }
+
+.hidden { display: none !important; }
+
+/* ---- Insight cards ---- */
+.insight-list { display: flex; flex-direction: column; gap: 8px; }
+.insight-item {
+  background: var(--surface2);
+  border-left: 3px solid var(--accent);
+  padding: 10px 14px;
+  border-radius: 0 7px 7px 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
