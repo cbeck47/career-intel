@@ -4,29 +4,28 @@ const fs = require("fs");
 const path = require("path");
 const cron = require("node-cron");
 const OpenAI = require("openai");
+const { ZodError } = require("zod");
 
 const { fetchUSAJobs } = require("./fetchers/usajobs");
 const { getAdapter, isSupportedAts } = require("./adapters/index");
 const { rankJobs } = require("./ranking/heuristic");
 const { scoreJobWithAI } = require("./ai/matchJob");
+const { matchJobSchema } = require("./ai/schemas");
 const { detectAts } = require("./discovery/detectAts");
 const {
   normalizeCompany,
   migrateFromConfig,
   mergeCompanies,
 } = require("./registry/companies");
+const db = require("./db");
 
 const app = express();
 app.use(express.json({ limit: "2mb" }));
 app.use(express.static(__dirname));
 
-const DATA_DIR = path.join(__dirname, "data");
-const JOBS_FILE = path.join(DATA_DIR, "jobs.json");
-const PROFILE_FILE = path.join(DATA_DIR, "profile.json");
-const DISCOVER_FILE = path.join(DATA_DIR, "discover.json");
-const COMPANIES_FILE = path.join(DATA_DIR, "companies.json");
-
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+db.initDb();
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -41,44 +40,33 @@ function loadConfig() {
   return JSON.parse(fs.readFileSync(cfgPath, "utf8"));
 }
 
-function readJson(filePath, fallback) {
-  if (!fs.existsSync(filePath)) return fallback;
-  try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8"));
-  } catch {
-    return fallback;
-  }
-}
-
-function writeJson(filePath, data) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
-}
-
-function readCompaniesFile() {
-  return readJson(COMPANIES_FILE, { companies: [] });
-}
-
-function writeCompaniesFile(data) {
-  writeJson(COMPANIES_FILE, data);
-}
-
 function migrateCompaniesIfEmpty() {
-  const registry = readCompaniesFile();
+  const registry = db.companies.getAll();
   if (registry.companies.length > 0) return registry;
 
   const config = loadConfig();
   const migrated = migrateFromConfig(config);
   if (!migrated.length) return registry;
 
-  const next = { companies: migrated };
-  writeCompaniesFile(next);
+  db.companies.saveRegistry({ companies: migrated });
   console.log(`[registry] Migrated ${migrated.length} companies from config.json`);
-  return next;
+  return { companies: migrated };
 }
 
 function loadCompaniesRegistry() {
   return migrateCompaniesIfEmpty();
+}
+
+function dedupeJobsById(jobs) {
+  const byId = new Map();
+  for (const job of jobs) {
+    if (!byId.has(job.id)) byId.set(job.id, job);
+  }
+  return [...byId.values()];
+}
+
+function formatZodError(err) {
+  return err.errors.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ");
 }
 
 // ---------------------------------------------------------------------------
@@ -149,27 +137,21 @@ async function syncJobs() {
     }
   }
 
-  // Merge with existing to preserve AI scores
-  const existing = readJson(JOBS_FILE, []);
-  const existingById = Object.fromEntries(existing.map((j) => [j.id, j]));
-  const merged = allJobs.map((j) => ({
-    ...existingById[j.id],
-    ...j,
-    ai_score: existingById[j.id]?.ai_score ?? null,
-    heuristic_score: existingById[j.id]?.heuristic_score ?? null,
-    heuristic_scored_at: existingById[j.id]?.heuristic_scored_at ?? null,
-  }));
+  const uniqueJobs = dedupeJobsById(allJobs);
+  const freshIds = uniqueJobs.map((job) => job.id);
+  db.jobs.upsertMany(uniqueJobs);
+  const closedCount = db.jobs.markClosed(freshIds);
+  const activeJobs = db.jobs.getAll({ activeOnly: true });
 
-  writeJson(JOBS_FILE, merged);
-  console.log(`[sync] Done — ${merged.length} total jobs saved`);
-  return merged;
+  console.log(`[sync] Done — ${activeJobs.length} active jobs (${closedCount} marked closed)`);
+  return activeJobs;
 }
 
 // ---------------------------------------------------------------------------
 // AI helpers
 // ---------------------------------------------------------------------------
 
-async function aiJson(systemPrompt, userPrompt, model = "gpt-4o-mini") {
+async function aiJson(systemPrompt, userPrompt, model = "gpt-4o-mini", schema = null) {
   const res = await openai.chat.completions.create({
     model,
     response_format: { type: "json_object" },
@@ -179,7 +161,32 @@ async function aiJson(systemPrompt, userPrompt, model = "gpt-4o-mini") {
     ],
     temperature: 0.2,
   });
-  return JSON.parse(res.choices[0].message.content);
+
+  let parsed;
+  try {
+    parsed = JSON.parse(res.choices[0].message.content);
+  } catch (err) {
+    throw new Error(`Invalid JSON from model: ${err.message}`);
+  }
+
+  if (schema) {
+    try {
+      return schema.parse(parsed);
+    } catch (err) {
+      if (err instanceof ZodError) {
+        throw new Error(`AI response validation failed: ${formatZodError(err)}`);
+      }
+      throw err;
+    }
+  }
+
+  return parsed;
+}
+
+async function scoreJobWithValidation(job, profile) {
+  return scoreJobWithAI(job, profile, (system, user) =>
+    aiJson(system, user, "gpt-4o-mini", matchJobSchema)
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -187,19 +194,19 @@ async function aiJson(systemPrompt, userPrompt, model = "gpt-4o-mini") {
 // ---------------------------------------------------------------------------
 
 app.get("/api/jobs", (req, res) => {
-  const jobs = readJson(JOBS_FILE, []);
+  const jobs = db.jobs.getAll({ activeOnly: true });
   res.json(jobs);
 });
 
 app.post("/api/jobs/rank", (req, res) => {
-  const profile = readJson(PROFILE_FILE, {});
+  const profile = db.profile.get();
   if (!profile.name?.trim() || !(profile.skills ?? []).length) {
     return res.status(400).json({ error: "Profile must include name and skills before ranking jobs" });
   }
 
-  const discoverSaved = readJson(DISCOVER_FILE, null);
+  const discoverSaved = db.discover.get();
   const discoverResult = discoverSaved?.result ?? null;
-  const jobs = readJson(JOBS_FILE, []);
+  const jobs = db.jobs.getAll({ activeOnly: true });
   const config = loadConfig();
   const topN = config.ranking?.top_n ?? 50;
   const rankedAt = new Date().toISOString();
@@ -208,7 +215,7 @@ app.post("/api/jobs/rank", (req, res) => {
   ranked.forEach((job) => {
     job.heuristic_scored_at = rankedAt;
   });
-  writeJson(JOBS_FILE, ranked);
+  db.jobs.updateRankings(ranked);
 
   const top50 = ranked.slice(0, topN).map((job) => ({
     id: job.id,
@@ -216,6 +223,7 @@ app.post("/api/jobs/rank", (req, res) => {
     company: job.company,
     source: job.source,
     heuristic_score: job.heuristic_score,
+    heuristic_components: job.heuristic_components,
     url: job.url,
   }));
 
@@ -227,10 +235,10 @@ app.post("/api/jobs/deep-score", async (req, res) => {
     return res.status(503).json({ error: "OpenAI key not configured" });
   }
 
-  const profile = readJson(PROFILE_FILE, {});
+  const profile = db.profile.get();
   const config = loadConfig();
   const topN = config.ranking?.top_n ?? 50;
-  const jobs = readJson(JOBS_FILE, []);
+  const jobs = db.jobs.getAll({ activeOnly: true });
   const candidates = [...jobs]
     .sort((a, b) => (b.heuristic_score ?? -1) - (a.heuristic_score ?? -1))
     .slice(0, topN);
@@ -244,9 +252,8 @@ app.post("/api/jobs/deep-score", async (req, res) => {
 
   for (const job of candidates) {
     try {
-      const score = await scoreJobWithAI(job, profile, aiJson);
-      const stored = jobs.find((item) => item.id === job.id);
-      if (stored) stored.ai_score = score;
+      const score = await scoreJobWithValidation(job, profile);
+      db.jobs.updateAiScore(job.id, score);
       scored += 1;
       await new Promise((resolve) => setTimeout(resolve, 600));
     } catch (err) {
@@ -255,7 +262,6 @@ app.post("/api/jobs/deep-score", async (req, res) => {
     }
   }
 
-  writeJson(JOBS_FILE, jobs);
   res.json({ scored, errors, total: candidates.length });
 });
 
@@ -312,7 +318,7 @@ app.post("/api/companies", (req, res) => {
   }
 
   registry.companies.sort((a, b) => a.name.localeCompare(b.name));
-  writeCompaniesFile(registry);
+  db.companies.saveRegistry(registry);
   res.json(registry.companies.find((item) => item.id === company.id) ?? company);
 });
 
@@ -323,7 +329,7 @@ app.delete("/api/companies/:id", (req, res) => {
   if (registry.companies.length === before) {
     return res.status(404).json({ error: "Company not found" });
   }
-  writeCompaniesFile(registry);
+  db.companies.saveRegistry(registry);
   res.json({ ok: true });
 });
 
@@ -353,7 +359,7 @@ app.post("/api/companies/import", (req, res) => {
 
   const registry = loadCompaniesRegistry();
   registry.companies = mergeCompanies(registry.companies, incoming);
-  writeCompaniesFile(registry);
+  db.companies.saveRegistry(registry);
   res.json({ imported: incoming.length, total: registry.companies.length, companies: registry.companies });
 });
 
@@ -362,12 +368,12 @@ app.post("/api/companies/import", (req, res) => {
 // ---------------------------------------------------------------------------
 
 app.get("/api/profile", (req, res) => {
-  res.json(readJson(PROFILE_FILE, {}));
+  res.json(db.profile.get());
 });
 
 app.post("/api/profile", (req, res) => {
   const profile = req.body;
-  writeJson(PROFILE_FILE, profile);
+  db.profile.save(profile);
   res.json({ ok: true });
 });
 
@@ -427,21 +433,21 @@ Rules:
 
 app.post("/api/ai/match", async (req, res) => {
   const { job_id } = req.body;
-  const jobs = readJson(JOBS_FILE, []);
-  const profile = readJson(PROFILE_FILE, {});
-  const job = jobs.find((j) => j.id === job_id);
-  if (!job) return res.status(404).json({ error: "Job not found" });
-  if (!process.env.OPENAI_API_KEY)
+  const job = db.jobs.getById(job_id);
+  const profile = db.profile.get();
+  if (!job || job.closed_at) return res.status(404).json({ error: "Job not found" });
+  if (!process.env.OPENAI_API_KEY) {
     return res.status(503).json({ error: "OpenAI key not configured" });
+  }
 
   try {
-    const score = await scoreJobWithAI(job, profile, aiJson);
-    job.ai_score = score;
-    writeJson(JOBS_FILE, jobs);
+    const score = await scoreJobWithValidation(job, profile);
+    db.jobs.updateAiScore(job.id, score);
     res.json(score);
   } catch (err) {
     console.error("[/api/ai/match]", err);
-    res.status(500).json({ error: err.message });
+    const status = err.message.includes("validation failed") ? 422 : 500;
+    res.status(status).json({ error: err.message });
   }
 });
 
@@ -450,7 +456,7 @@ app.post("/api/ai/match", async (req, res) => {
 // ---------------------------------------------------------------------------
 
 app.get("/api/discover", (req, res) => {
-  const saved = readJson(DISCOVER_FILE, null);
+  const saved = db.discover.get();
   if (!saved?.result) {
     return res.json({ result: null, analyzed_at: null });
   }
@@ -466,15 +472,16 @@ app.post("/api/discover", (req, res) => {
     result,
     analyzed_at: analyzed_at ?? new Date().toISOString(),
   };
-  writeJson(DISCOVER_FILE, saved);
+  db.discover.save(saved);
   res.json(saved);
 });
 
 app.post("/api/ai/discover", async (req, res) => {
-  const profile = readJson(PROFILE_FILE, {});
-  const jobs = readJson(JOBS_FILE, []);
-  if (!process.env.OPENAI_API_KEY)
+  const profile = db.profile.get();
+  const jobs = db.jobs.getAll({ activeOnly: true });
+  if (!process.env.OPENAI_API_KEY) {
     return res.status(503).json({ error: "OpenAI key not configured" });
+  }
 
   const scoredJobs = jobs.filter((j) => j.ai_score);
   const adjacentTitles = scoredJobs.flatMap(
@@ -518,7 +525,6 @@ Rules:
 
     const result = await aiJson(system, user);
 
-    // Merge server-computed job counts into sector heatmap
     const aiHeatmap = result.sector_heatmap ?? [];
     result.sector_heatmap = Object.entries(sectorCounts)
       .map(([sector, job_count]) => {
@@ -536,7 +542,7 @@ Rules:
       .sort((a, b) => b.job_count - a.job_count);
 
     const saved = { result, analyzed_at: new Date().toISOString() };
-    writeJson(DISCOVER_FILE, saved);
+    db.discover.save(saved);
     res.json(saved);
   } catch (err) {
     console.error("[/api/ai/discover]", err);
@@ -550,9 +556,10 @@ Rules:
 
 app.post("/api/ai/worth", async (req, res) => {
   const { market_context, scenarios } = req.body;
-  const profile = readJson(PROFILE_FILE, {});
-  if (!process.env.OPENAI_API_KEY)
+  const profile = db.profile.get();
+  if (!process.env.OPENAI_API_KEY) {
     return res.status(503).json({ error: "OpenAI key not configured" });
+  }
 
   try {
     const system = `You are a compensation intelligence engine. Given a candidate profile and optional market context, return a JSON object with exactly these keys:
@@ -588,12 +595,12 @@ app.post("/api/ai/worth", async (req, res) => {
 
 app.post("/api/ai/resume", async (req, res) => {
   const { job_id } = req.body;
-  const jobs = readJson(JOBS_FILE, []);
-  const profile = readJson(PROFILE_FILE, {});
-  const job = jobs.find((j) => j.id === job_id);
-  if (!job) return res.status(404).json({ error: "Job not found" });
-  if (!process.env.OPENAI_API_KEY)
+  const job = db.jobs.getById(job_id);
+  const profile = db.profile.get();
+  if (!job || job.closed_at) return res.status(404).json({ error: "Job not found" });
+  if (!process.env.OPENAI_API_KEY) {
     return res.status(503).json({ error: "OpenAI key not configured" });
+  }
 
   try {
     const system = `You are an expert resume writer and career coach. Given a candidate profile and a target job, return a JSON object with exactly these keys:

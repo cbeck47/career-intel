@@ -397,13 +397,28 @@ function filteredJobs() {
   return jobs;
 }
 
+function formatHeuristicBreakdown(components) {
+  if (!components) return "";
+  const pct = (value) => Math.round((value ?? 0) * 100);
+  return [
+    `Skills ${pct(components.skills)}%`,
+    `Title ${pct(components.title)}%`,
+    `Sector ${pct(components.sector)}%`,
+    `Remote ${pct(components.remote)}%`,
+    `Salary ${pct(components.salary)}%`,
+    `Location ${pct(components.location)}%`,
+  ].join(" · ");
+}
+
 function fitScorePill(job) {
   const aiScore = job.ai_score?.overall_score;
   if (aiScore != null) {
     return `<span class="score-pill ${scoreClass(aiScore)}">${aiScore}%</span>`;
   }
   if (job.heuristic_score != null) {
-    return `<span class="score-pill score-heuristic">${job.heuristic_score}%</span>`;
+    const tip = formatHeuristicBreakdown(job.heuristic_components);
+    const titleAttr = tip ? ` title="${escHtml(tip)}"` : "";
+    return `<span class="score-pill score-heuristic score-heuristic-detail"${titleAttr}>${job.heuristic_score}%</span>`;
   }
   return `<button class="btn btn-secondary btn-sm score-job" data-id="${escHtml(job.id)}">Score</button>`;
 }

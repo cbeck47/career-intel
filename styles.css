@@ -220,6 +220,7 @@ td a:hover { text-decoration: underline; }
 .score-mid  { background: rgba(251,191,36,0.15);  color: var(--yellow); }
 .score-low  { background: rgba(248,113,113,0.15);  color: var(--red); }
 .score-heuristic { background: rgba(108,140,255,0.15); color: var(--accent); }
+.score-heuristic-detail { cursor: help; border-bottom: 1px dotted var(--accent); }
 
 /* ---- Source Badge ---- */
 .source-badge {

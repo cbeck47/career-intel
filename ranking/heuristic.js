@@ -105,15 +105,20 @@ function computeHeuristicScore(job, profile, discoverResult) {
     components.salary * 0.10 +
     components.location * 0.05;
 
-  return Math.round(Math.min(100, Math.max(0, weighted * 100)));
+  const score = Math.round(Math.min(100, Math.max(0, weighted * 100)));
+  return { score, components };
 }
 
 function rankJobs(jobs, profile, discoverResult) {
   return jobs
-    .map((job) => ({
-      ...job,
-      heuristic_score: computeHeuristicScore(job, profile, discoverResult),
-    }))
+    .map((job) => {
+      const { score, components } = computeHeuristicScore(job, profile, discoverResult);
+      return {
+        ...job,
+        heuristic_score: score,
+        heuristic_components: components,
+      };
+    })
     .sort((a, b) => b.heuristic_score - a.heuristic_score);
 }
 

@@ -6,6 +6,10 @@ const {
   DEFAULT_TITLE_KEYWORDS,
 } = require("./syncFilters");
 
+const BASE = "https://api.smartrecruiters.com/v1/companies";
+const PAGE_SIZE = 100;
+const DETAIL_DELAY_MS = 500;
+
 function stripHtml(html) {
   return html.replace(/<[^>]+>/g, " ").replace(/\s{2,}/g, " ").trim();
 }

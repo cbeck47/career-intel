@@ -3,7 +3,7 @@ const fetch = require("node-fetch");
 const { parseOracleIdentifier } = require("../registry/companies");
 const { jobMatchesSyncFilters } = require("./syncFilters");
 
-const PAGE_SIZE = 100;
+const PAGE_SIZE = 25;
 const PAGE_DELAY_MS = 400;
 const USER_AGENT = "CareerIntel/1.0 (Oracle Recruiting Cloud)";
 
@@ -106,9 +106,8 @@ async function fetchJobPage(tenantHost, siteNumber, offset, sessionUserId) {
   const params = new URLSearchParams({
     onlyData: "true",
     expand: "requisitionList.workLocation",
-    finder: `findReqs;siteNumber=${siteNumber}`,
+    finder: `findReqs;siteNumber=${siteNumber},offset=${offset}`,
     limit: String(PAGE_SIZE),
-    offset: String(offset),
   });
 
   const url = `https://${tenantHost}/hcmRestApi/resources/latest/recruitingCEJobRequisitions?${params}`;
@@ -134,6 +133,7 @@ async function fetchOracleRecruiting(identifier, options = {}) {
   const ctx = { tenantHost, siteNumber, applicationUrl, displayName, locale };
 
   const jobs = [];
+  const seenIds = new Set();
   let offset = 0;
   let totalCount = null;
 
@@ -151,7 +151,9 @@ async function fetchOracleRecruiting(identifier, options = {}) {
 
     for (const req of requisitions) {
       const job = normalizeJob(req, ctx);
+      if (seenIds.has(job.id)) continue;
       if (!jobMatchesSyncFilters(job, options)) continue;
+      seenIds.add(job.id);
       jobs.push(job);
     }
 
