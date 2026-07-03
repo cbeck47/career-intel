@@ -1,6 +1,6 @@
 # Career Intel
 
-A personal career intelligence app. Pulls jobs from USAJOBS, Greenhouse, Lever, and Ashby, scores them against your profile using AI, and helps you discover adjacent careers, understand your market value, and tailor your resume.
+A personal career intelligence app. Pulls jobs from USAJOBS and company career pages via ATS adapters (Greenhouse, Lever, Ashby, SmartRecruiters, Oracle Recruiting Cloud), scores them against your profile using AI, and helps you discover adjacent careers, understand your market value, and tailor your resume.
 
 ## Setup
 
@@ -37,7 +37,15 @@ cp config.example.json config.json
 ```
 
 - Set your search keywords, location, and radius for USAJOBS
-- Add company slugs for Greenhouse, Lever, and Ashby
+- Add employers to the **Companies** registry (via ATS Discovery or import)
+
+**Company Registry:** Employers are stored in `data/companies.json` with ATS type and identifier. On first run, existing config slug arrays are migrated automatically. Use the **Companies** tab to paste a careers URL — the app detects the ATS, extracts the identifier, and scores confidence. High-confidence detections (default ≥85) can be added with one click.
+
+**Oracle Recruiting Cloud:** Identifier format is `{tenantHost}|{siteNumber}` (e.g. `efds.fa.em5.oraclecloud.com|CX_1` for Ford). Optional `application_url` builds apply links like `https://apply.ford.com/en/sites/CX_1/job/{id}`.
+
+**Sync filters:** Set `sync_filters.enabled` to `true` in config to only sync jobs matching both location and title keyword lists. Default is `false` (sync all jobs). Applies to SmartRecruiters and Oracle Recruiting Cloud.
+
+**SmartRecruiters detail fetching:** When sync filters are off, full job descriptions are still fetched selectively when a posting matches location/title keywords (legacy `smartrecruiters.detail_*` keys, or `sync_filters` keywords).
 
 ### 4. Run
 
@@ -50,16 +58,19 @@ Open http://localhost:3000
 ## Usage
 
 1. **Profile** tab — paste your resume, add skills, set compensation targets
-2. **Jobs** tab — click "Sync Jobs" to pull from all sources
-3. Click the **Score** button on any job to run AI matching
-4. **Discover** tab — click "Analyze" to find adjacent careers and skill gaps
-5. **My Worth** tab — click "Analyze" for market value estimate and career ROI
-6. **Tailor Resume** tab — select a job and generate a tailored resume + cover letter
-7. **Tracker** tab — track application status from Saved → Offer
+2. **Companies** tab — paste careers URLs to detect ATS and build your registry
+3. **Jobs** tab — click "Sync Jobs" to pull from USAJOBS and registered companies
+4. Click the **Score** button on any job to run AI matching
+5. **Discover** tab — click "Analyze" to find adjacent careers and skill gaps
+6. **My Worth** tab — click "Analyze" for market value estimate and career ROI
+7. **Tailor Resume** tab — select a job and generate a tailored resume + cover letter
+8. **Tracker** tab — track application status from Saved → Offer
 
 ## Data
 
 All sensitive data stays local:
 - `data/profile.json` — your profile (gitignored)
 - `data/jobs.json` — fetched and scored jobs (gitignored)
-- `localStorage` — tracker, discover cache, worth cache
+- `data/companies.json` — company registry with ATS identifiers (gitignored)
+- `data/discover.json` — last Career Discovery analysis (gitignored)
+- `localStorage` — tracker and worth cache

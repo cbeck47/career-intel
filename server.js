@@ -6,9 +6,15 @@ const cron = require("node-cron");
 const OpenAI = require("openai");
 
 const { fetchUSAJobs } = require("./fetchers/usajobs");
-const { fetchGreenhouse } = require("./fetchers/greenhouse");
-const { fetchLever } = require("./fetchers/lever");
-const { fetchAshby } = require("./fetchers/ashby");
+const { getAdapter, isSupportedAts } = require("./adapters/index");
+const { rankJobs } = require("./ranking/heuristic");
+const { scoreJobWithAI } = require("./ai/matchJob");
+const { detectAts } = require("./discovery/detectAts");
+const {
+  normalizeCompany,
+  migrateFromConfig,
+  mergeCompanies,
+} = require("./registry/companies");
 
 const app = express();
 app.use(express.json({ limit: "2mb" }));
@@ -17,6 +23,8 @@ app.use(express.static(__dirname));
 const DATA_DIR = path.join(__dirname, "data");
 const JOBS_FILE = path.join(DATA_DIR, "jobs.json");
 const PROFILE_FILE = path.join(DATA_DIR, "profile.json");
+const DISCOVER_FILE = path.join(DATA_DIR, "discover.json");
+const COMPANIES_FILE = path.join(DATA_DIR, "companies.json");
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -47,6 +55,32 @@ function writeJson(filePath, data) {
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
 }
 
+function readCompaniesFile() {
+  return readJson(COMPANIES_FILE, { companies: [] });
+}
+
+function writeCompaniesFile(data) {
+  writeJson(COMPANIES_FILE, data);
+}
+
+function migrateCompaniesIfEmpty() {
+  const registry = readCompaniesFile();
+  if (registry.companies.length > 0) return registry;
+
+  const config = loadConfig();
+  const migrated = migrateFromConfig(config);
+  if (!migrated.length) return registry;
+
+  const next = { companies: migrated };
+  writeCompaniesFile(next);
+  console.log(`[registry] Migrated ${migrated.length} companies from config.json`);
+  return next;
+}
+
+function loadCompaniesRegistry() {
+  return migrateCompaniesIfEmpty();
+}
+
 // ---------------------------------------------------------------------------
 // Job sync
 // ---------------------------------------------------------------------------
@@ -72,33 +106,46 @@ async function syncJobs() {
     }
   }
 
-  if (sources.greenhouse) {
-    try {
-      const jobs = await fetchGreenhouse(config.greenhouse_companies ?? []);
-      console.log(`[sync] Greenhouse: ${jobs.length} jobs`);
-      allJobs.push(...jobs);
-    } catch (err) {
-      console.error("[sync] Greenhouse error:", err.message);
-    }
-  }
+  const registry = loadCompaniesRegistry();
+  const srCfg = config.smartrecruiters ?? {};
+  const syncFilters = config.sync_filters ?? {};
+  const enabledCompanies = registry.companies.filter(
+    (company) => company.enabled && company.ats_identifier && company.ats_type
+  );
 
-  if (sources.lever) {
-    try {
-      const jobs = await fetchLever(config.lever_companies ?? []);
-      console.log(`[sync] Lever: ${jobs.length} jobs`);
-      allJobs.push(...jobs);
-    } catch (err) {
-      console.error("[sync] Lever error:", err.message);
-    }
-  }
+  for (const company of enabledCompanies) {
+    if (sources[company.ats_type] === false) continue;
 
-  if (sources.ashby) {
+    const adapter = getAdapter(company.ats_type);
+    if (!adapter) {
+      if (!isSupportedAts(company.ats_type)) {
+        console.warn(
+          `[sync] No fetch adapter for ${company.name} (${company.ats_type}) — discovery only`
+        );
+      }
+      continue;
+    }
+
     try {
-      const jobs = await fetchAshby(config.ashby_companies ?? []);
-      console.log(`[sync] Ashby: ${jobs.length} jobs`);
-      allJobs.push(...jobs);
+      const adapterOpts = {
+        displayName: company.name,
+        syncFilters,
+        smartrecruitersConfig: srCfg,
+        detailLocationKeywords: srCfg.detail_location_keywords,
+        detailTitleKeywords: srCfg.detail_title_keywords,
+        applicationUrl: company.application_url ?? null,
+      };
+      const jobs = await adapter.fetch(company.ats_identifier, adapterOpts);
+      allJobs.push(
+        ...jobs.map((job) => ({
+          ...job,
+          company: company.name,
+          registry_id: company.id,
+        }))
+      );
+      console.log(`[sync] ${company.name} (${company.ats_type}): ${jobs.length} jobs`);
     } catch (err) {
-      console.error("[sync] Ashby error:", err.message);
+      console.error(`[sync] ${company.name} error:`, err.message);
     }
   }
 
@@ -109,6 +156,8 @@ async function syncJobs() {
     ...existingById[j.id],
     ...j,
     ai_score: existingById[j.id]?.ai_score ?? null,
+    heuristic_score: existingById[j.id]?.heuristic_score ?? null,
+    heuristic_scored_at: existingById[j.id]?.heuristic_scored_at ?? null,
   }));
 
   writeJson(JOBS_FILE, merged);
@@ -142,6 +191,74 @@ app.get("/api/jobs", (req, res) => {
   res.json(jobs);
 });
 
+app.post("/api/jobs/rank", (req, res) => {
+  const profile = readJson(PROFILE_FILE, {});
+  if (!profile.name?.trim() || !(profile.skills ?? []).length) {
+    return res.status(400).json({ error: "Profile must include name and skills before ranking jobs" });
+  }
+
+  const discoverSaved = readJson(DISCOVER_FILE, null);
+  const discoverResult = discoverSaved?.result ?? null;
+  const jobs = readJson(JOBS_FILE, []);
+  const config = loadConfig();
+  const topN = config.ranking?.top_n ?? 50;
+  const rankedAt = new Date().toISOString();
+
+  const ranked = rankJobs(jobs, profile, discoverResult);
+  ranked.forEach((job) => {
+    job.heuristic_scored_at = rankedAt;
+  });
+  writeJson(JOBS_FILE, ranked);
+
+  const top50 = ranked.slice(0, topN).map((job) => ({
+    id: job.id,
+    title: job.title,
+    company: job.company,
+    source: job.source,
+    heuristic_score: job.heuristic_score,
+    url: job.url,
+  }));
+
+  res.json({ ranked: ranked.length, top50, ran_at: rankedAt });
+});
+
+app.post("/api/jobs/deep-score", async (req, res) => {
+  if (!process.env.OPENAI_API_KEY) {
+    return res.status(503).json({ error: "OpenAI key not configured" });
+  }
+
+  const profile = readJson(PROFILE_FILE, {});
+  const config = loadConfig();
+  const topN = config.ranking?.top_n ?? 50;
+  const jobs = readJson(JOBS_FILE, []);
+  const candidates = [...jobs]
+    .sort((a, b) => (b.heuristic_score ?? -1) - (a.heuristic_score ?? -1))
+    .slice(0, topN);
+
+  if (!candidates.length) {
+    return res.status(400).json({ error: "Rank jobs first to select top candidates for deep scoring" });
+  }
+
+  let scored = 0;
+  let errors = 0;
+
+  for (const job of candidates) {
+    try {
+      const score = await scoreJobWithAI(job, profile, aiJson);
+      const stored = jobs.find((item) => item.id === job.id);
+      if (stored) stored.ai_score = score;
+      scored += 1;
+      await new Promise((resolve) => setTimeout(resolve, 600));
+    } catch (err) {
+      console.error(`[/api/jobs/deep-score] ${job.id}:`, err.message);
+      errors += 1;
+    }
+  }
+
+  writeJson(JOBS_FILE, jobs);
+  res.json({ scored, errors, total: candidates.length });
+});
+
 app.post("/api/jobs/sync", async (req, res) => {
   try {
     const jobs = await syncJobs();
@@ -150,6 +267,94 @@ app.post("/api/jobs/sync", async (req, res) => {
     console.error("[/api/jobs/sync]", err);
     res.status(500).json({ ok: false, error: err.message });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Routes — Company Registry
+// ---------------------------------------------------------------------------
+
+app.get("/api/companies", (req, res) => {
+  const registry = loadCompaniesRegistry();
+  const config = loadConfig();
+  res.json({
+    ...registry,
+    discovery_min_confidence: config.discovery?.auto_add_min_confidence ?? 85,
+  });
+});
+
+app.post("/api/companies", (req, res) => {
+  const registry = loadCompaniesRegistry();
+  const company = normalizeCompany(req.body ?? {});
+
+  if (!company.ats_type || !company.ats_identifier) {
+    return res.status(400).json({ error: "ats_type and ats_identifier are required" });
+  }
+
+  let idx = registry.companies.findIndex((item) => item.id === company.id);
+  if (idx < 0) {
+    idx = registry.companies.findIndex(
+      (item) =>
+        item.ats_type === company.ats_type &&
+        item.ats_identifier.toLowerCase() === company.ats_identifier.toLowerCase()
+    );
+  }
+
+  if (idx >= 0) {
+    registry.companies[idx] = {
+      ...registry.companies[idx],
+      ...company,
+      id: registry.companies[idx].id,
+      added_at: registry.companies[idx].added_at,
+    };
+    company.id = registry.companies[idx].id;
+  } else {
+    registry.companies.push(company);
+  }
+
+  registry.companies.sort((a, b) => a.name.localeCompare(b.name));
+  writeCompaniesFile(registry);
+  res.json(registry.companies.find((item) => item.id === company.id) ?? company);
+});
+
+app.delete("/api/companies/:id", (req, res) => {
+  const registry = loadCompaniesRegistry();
+  const before = registry.companies.length;
+  registry.companies = registry.companies.filter((item) => item.id !== req.params.id);
+  if (registry.companies.length === before) {
+    return res.status(404).json({ error: "Company not found" });
+  }
+  writeCompaniesFile(registry);
+  res.json({ ok: true });
+});
+
+app.post("/api/companies/discover", async (req, res) => {
+  const { url } = req.body ?? {};
+  if (!url?.trim()) {
+    return res.status(400).json({ error: "url is required" });
+  }
+
+  try {
+    const result = await detectAts(url.trim());
+    if (result.error && !result.ats_type) {
+      return res.status(400).json(result);
+    }
+    res.json(result);
+  } catch (err) {
+    console.error("[/api/companies/discover]", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/companies/import", (req, res) => {
+  const incoming = req.body?.companies ?? req.body;
+  if (!Array.isArray(incoming)) {
+    return res.status(400).json({ error: "Expected { companies: [...] }" });
+  }
+
+  const registry = loadCompaniesRegistry();
+  registry.companies = mergeCompanies(registry.companies, incoming);
+  writeCompaniesFile(registry);
+  res.json({ imported: incoming.length, total: registry.companies.length, companies: registry.companies });
 });
 
 // ---------------------------------------------------------------------------
@@ -167,6 +372,56 @@ app.post("/api/profile", (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// Routes — AI resume parser
+// ---------------------------------------------------------------------------
+
+app.post("/api/ai/parse-resume", async (req, res) => {
+  const { resume_text } = req.body ?? {};
+  if (!resume_text?.trim()) {
+    return res.status(400).json({ error: "resume_text is required" });
+  }
+  if (!process.env.OPENAI_API_KEY) {
+    return res.status(503).json({ error: "OpenAI key not configured" });
+  }
+
+  try {
+    const system = `You are a resume parser. Extract structured profile data from the resume text. Return a JSON object with exactly these keys:
+{
+  "name": string or null,
+  "headline": string or null,
+  "location": string or null,
+  "email": string or null,
+  "years_experience": number or null,
+  "skills": [string],
+  "certifications": [string],
+  "education": string or null,
+  "work_history": [{
+    "title": string,
+    "company": string,
+    "years": number or null,
+    "team_size": number or null,
+    "sector": string or null
+  }]
+}
+Rules:
+- Extract only information explicitly present or clearly inferable from the resume.
+- Use null for missing scalar fields and [] for missing arrays.
+- headline should be the candidate's current or most recent professional title.
+- years_experience is total professional years if stated or reasonably inferable.
+- skills should include technical skills, tools, frameworks, leadership competencies, and domain expertise.
+- work_history should be ordered most recent first.
+- sector values should be short labels like tech, finance, automotive, healthcare, government, consulting.`;
+
+    const user = `RESUME TEXT:\n${resume_text.slice(0, 12000)}`;
+    const result = await aiJson(system, user);
+    res.json(result);
+  } catch (err) {
+    console.error("[/api/ai/parse-resume]", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Routes — AI match (Skill Graph)
 // ---------------------------------------------------------------------------
 
@@ -180,22 +435,7 @@ app.post("/api/ai/match", async (req, res) => {
     return res.status(503).json({ error: "OpenAI key not configured" });
 
   try {
-    const system = `You are a career intelligence engine. Given a candidate profile and a job description, return a JSON object with exactly these keys:
-{
-  "role_fit": <0-100 integer>,
-  "sector_fit": <0-100 integer>,
-  "comp_fit": <0-100 integer or null if salary unknown>,
-  "growth_score": <0-100 integer>,
-  "overall_score": <0-100 integer>,
-  "top_matching_skills": [<up to 5 skill strings from the profile that match the JD>],
-  "missing_skills": [<up to 5 skill strings present in JD but absent from profile>],
-  "adjacent_titles": [<up to 5 alternative job titles this candidate would qualify for>],
-  "recommendation": <one sentence plain-text recommendation>,
-  "summary": <two sentence plain-text summary of the fit>
-}`;
-    const user = `CANDIDATE PROFILE:\n${JSON.stringify(profile, null, 2)}\n\nJOB TITLE: ${job.title}\nCOMPANY: ${job.company}\nLOCATION: ${job.location}\nSALARY: ${job.salary_min ?? "?"} - ${job.salary_max ?? "?"} ${job.salary_interval ?? ""}\n\nJOB DESCRIPTION:\n${job.description_clean?.slice(0, 3000) ?? "(no description)"}`;
-
-    const score = await aiJson(system, user);
+    const score = await scoreJobWithAI(job, profile, aiJson);
     job.ai_score = score;
     writeJson(JOBS_FILE, jobs);
     res.json(score);
@@ -206,8 +446,29 @@ app.post("/api/ai/match", async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Routes — AI Career Discovery
+// Routes — Career Discovery (persisted)
 // ---------------------------------------------------------------------------
+
+app.get("/api/discover", (req, res) => {
+  const saved = readJson(DISCOVER_FILE, null);
+  if (!saved?.result) {
+    return res.json({ result: null, analyzed_at: null });
+  }
+  res.json(saved);
+});
+
+app.post("/api/discover", (req, res) => {
+  const { result, analyzed_at } = req.body ?? {};
+  if (!result || typeof result !== "object") {
+    return res.status(400).json({ error: "result is required" });
+  }
+  const saved = {
+    result,
+    analyzed_at: analyzed_at ?? new Date().toISOString(),
+  };
+  writeJson(DISCOVER_FILE, saved);
+  res.json(saved);
+});
 
 app.post("/api/ai/discover", async (req, res) => {
   const profile = readJson(PROFILE_FILE, {});
@@ -223,19 +484,60 @@ app.post("/api/ai/discover", async (req, res) => {
     (j) => j.ai_score?.missing_skills ?? []
   );
 
+  const sectorCounts = {};
+  for (const job of jobs) {
+    const sector = job.sector || "other";
+    sectorCounts[sector] = (sectorCounts[sector] ?? 0) + 1;
+  }
+  const sampleTitles = [...new Set(jobs.map((j) => j.title).filter(Boolean))].slice(0, 80);
+  const scoredSummaries = scoredJobs.slice(0, 25).map((j) => ({
+    title: j.title,
+    company: j.company,
+    sector: j.sector,
+    overall_score: j.ai_score?.overall_score ?? null,
+    adjacent_titles: j.ai_score?.adjacent_titles ?? [],
+    missing_skills: j.ai_score?.missing_skills ?? [],
+  }));
+
   try {
-    const system = `You are a career discovery engine. Given a candidate profile, scored jobs, and aggregated skill data, return a JSON object with exactly these keys:
+    const system = `You are a career discovery engine. Given a candidate profile, job pool data, and optional scored job matches, return a JSON object with exactly these keys:
 {
   "adjacent_roles": [{ "title": string, "frequency": number, "avg_fit": number, "description": string }],
   "top_skill_gaps": [{ "skill": string, "frequency": number, "impact": string }],
   "sector_heatmap": [{ "sector": string, "job_count": number, "avg_fit": number }],
   "career_insights": [<up to 5 plain-text insight strings about career opportunities>],
   "pivot_paths": [{ "from": string, "to": string, "skills_needed": [string], "difficulty": "Low"|"Medium"|"High" }]
-}`;
-    const user = `PROFILE:\n${JSON.stringify(profile, null, 2)}\n\nSCORED JOBS COUNT: ${scoredJobs.length}\nALL ADJACENT TITLES MENTIONED: ${[...new Set(adjacentTitles)].join(", ")}\nFREQUENT MISSING SKILLS: ${[...new Set(missingSkills)].join(", ")}\nSECTORS IN JOB POOL: ${[...new Set(jobs.map((j) => j.sector))].join(", ")}`;
+}
+Rules:
+- Even when SCORED JOBS COUNT is 0, still infer adjacent_roles, top_skill_gaps, and pivot_paths from the profile, skills, work history, and sample job titles.
+- Return at least 5 adjacent_roles and 3 top_skill_gaps when profile data is present.
+- avg_fit should be an integer 0-100 estimate based on profile fit, not job_count.
+- Use provided JOBS BY SECTOR counts for sector_heatmap job_count values.`;
+
+    const user = `PROFILE:\n${JSON.stringify(profile, null, 2)}\n\nJOB POOL TOTAL: ${jobs.length}\nJOBS BY SECTOR: ${JSON.stringify(sectorCounts)}\nSAMPLE JOB TITLES IN POOL:\n${sampleTitles.join("\n")}\n\nSCORED JOBS COUNT: ${scoredJobs.length}\nSCORED JOB DETAILS:\n${JSON.stringify(scoredSummaries, null, 2)}\nALL ADJACENT TITLES MENTIONED: ${[...new Set(adjacentTitles)].join(", ") || "(none)"}\nFREQUENT MISSING SKILLS: ${[...new Set(missingSkills)].join(", ") || "(none)"}`;
 
     const result = await aiJson(system, user);
-    res.json(result);
+
+    // Merge server-computed job counts into sector heatmap
+    const aiHeatmap = result.sector_heatmap ?? [];
+    result.sector_heatmap = Object.entries(sectorCounts)
+      .map(([sector, job_count]) => {
+        const aiEntry = aiHeatmap.find((s) => s.sector === sector);
+        const sectorScored = scoredJobs.filter((j) => j.sector === sector);
+        const avgFit = sectorScored.length
+          ? Math.round(
+              sectorScored.reduce((sum, j) => sum + (j.ai_score?.overall_score ?? 0), 0) /
+                sectorScored.length
+            )
+          : (aiEntry?.avg_fit ?? null);
+        return { sector, job_count, avg_fit: avgFit };
+      })
+      .filter((s) => s.job_count > 0)
+      .sort((a, b) => b.job_count - a.job_count);
+
+    const saved = { result, analyzed_at: new Date().toISOString() };
+    writeJson(DISCOVER_FILE, saved);
+    res.json(saved);
   } catch (err) {
     console.error("[/api/ai/discover]", err);
     res.status(500).json({ error: err.message });

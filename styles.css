@@ -219,6 +219,7 @@ td a:hover { text-decoration: underline; }
 .score-high { background: rgba(52,211,153,0.15); color: var(--green); }
 .score-mid  { background: rgba(251,191,36,0.15);  color: var(--yellow); }
 .score-low  { background: rgba(248,113,113,0.15);  color: var(--red); }
+.score-heuristic { background: rgba(108,140,255,0.15); color: var(--accent); }
 
 /* ---- Source Badge ---- */
 .source-badge {
@@ -234,6 +235,11 @@ td a:hover { text-decoration: underline; }
 .src-greenhouse { background: rgba(52,211,153,0.15); color: var(--green); }
 .src-lever    { background: rgba(167,139,250,0.15); color: var(--accent2); }
 .src-ashby    { background: rgba(251,191,36,0.15);  color: var(--yellow); }
+.src-smartrecruiters { background: rgba(244,114,182,0.15); color: #f472b6; }
+.src-workday { background: rgba(56,189,248,0.15); color: #38bdf8; }
+.src-icims { background: rgba(251,146,60,0.15); color: #fb923c; }
+.src-unknown { background: rgba(136,146,176,0.15); color: var(--muted); }
+.src-oracle_recruiting_cloud { background: rgba(251,146,60,0.15); color: #fb923c; }
 
 /* ---- Tags ---- */
 .tags { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -337,7 +343,7 @@ td a:hover { text-decoration: underline; }
 .band-exceptional  { color: var(--green); }
 
 /* ---- Network graph ---- */
-#discoveryCanvas { width: 100%; height: 420px; background: var(--surface2); border-radius: var(--radius); display: block; }
+#discoveryCanvas { width: 100%; height: 420px; background: var(--surface2); border-radius: var(--radius); display: block; max-width: 100%; }
 
 /* ---- Misc ---- */
 .empty-state {
@@ -382,3 +388,25 @@ td a:hover { text-decoration: underline; }
   font-size: 13px;
   line-height: 1.5;
 }
+
+.dash-action-item {
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.dash-action-item:hover {
+  border-left-color: var(--green);
+}
+
+.dash-source-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  margin-left: 6px;
+}
+.dash-source-scored { background: rgba(108,140,255,0.15); color: var(--accent); }
+.dash-source-heuristic { background: rgba(96,165,250,0.15); color: #60a5fa; }
+.dash-source-discover { background: rgba(167,139,250,0.15); color: var(--accent2); }

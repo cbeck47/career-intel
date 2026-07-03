@@ -14,6 +14,7 @@
     <nav>
       <button class="tabBtn active" data-tab="dashboard">Dashboard</button>
       <button class="tabBtn" data-tab="jobs">Jobs</button>
+      <button class="tabBtn" data-tab="companies">Companies</button>
       <button class="tabBtn" data-tab="discover">Discover</button>
       <button class="tabBtn" data-tab="worth">My Worth</button>
       <button class="tabBtn" data-tab="tailor">Tailor Resume</button>
@@ -31,16 +32,21 @@
       <div class="kpi-grid" id="dashKpis"></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
         <div class="card">
-          <div class="card-header"><span class="card-title">Top Matching Jobs</span></div>
+          <div class="card-header"><span class="card-title">Top Opportunities</span></div>
           <div id="dashTopJobs"></div>
         </div>
         <div class="card">
           <div class="card-header"><span class="card-title">Skill Gap Summary</span></div>
           <canvas id="skillGapChart" height="200"></canvas>
+          <div id="skillGapEmpty" class="hidden" style="font-size:13px;color:var(--muted);padding:8px 0"></div>
         </div>
       </div>
+      <div class="card" style="margin-top:16px" id="dashActions">
+        <div class="card-header"><span class="card-title">Next Actions</span></div>
+        <div id="dashActionList" class="insight-list"></div>
+      </div>
       <div class="card" style="margin-top:16px">
-        <div class="card-header"><span class="card-title">AI Insights</span></div>
+        <div class="card-header"><span class="card-title">Career Insights</span></div>
         <div id="dashInsights" class="insight-list"></div>
       </div>
     </div>
@@ -51,6 +57,8 @@
     <div id="tab-jobs" class="tabPanel">
       <div class="toolbar">
         <button class="btn btn-primary" id="btnSync">&#8635; Sync Jobs</button>
+        <button class="btn btn-secondary" id="btnRank">Rank Jobs</button>
+        <button class="btn btn-secondary" id="btnDeepScore">Deep Score Top 50</button>
         <input type="text" id="jobSearch" placeholder="Search title, company…" style="flex:1;max-width:280px" />
         <select id="jobSourceFilter">
           <option value="">All sources</option>
@@ -58,6 +66,11 @@
           <option value="greenhouse">Greenhouse</option>
           <option value="lever">Lever</option>
           <option value="ashby">Ashby</option>
+          <option value="smartrecruiters">SmartRecruiters</option>
+          <option value="oracle_recruiting_cloud">Oracle Recruiting Cloud</option>
+        </select>
+        <select id="jobCompanyFilter">
+          <option value="">All companies</option>
         </select>
         <select id="jobSectorFilter">
           <option value="">All sectors</option>
@@ -66,8 +79,15 @@
           <option value="product">Product</option>
           <option value="sales">Sales</option>
         </select>
+        <input type="text" id="jobLocationFilter" placeholder="Location (city, state…)" style="max-width:180px" />
+        <select id="jobRemoteFilter">
+          <option value="">All work types</option>
+          <option value="remote">Remote only</option>
+          <option value="onsite">Onsite only</option>
+        </select>
         <select id="jobSortSelect">
-          <option value="score">Sort: Best match</option>
+          <option value="heuristic">Sort: Heuristic match</option>
+          <option value="score">Sort: Best match (AI)</option>
           <option value="recent">Sort: Most recent</option>
           <option value="salary">Sort: Salary</option>
         </select>
@@ -98,12 +118,69 @@
     </div>
 
     <!-- ====================================================
+         COMPANIES
+    ===================================================== -->
+    <div id="tab-companies" class="tabPanel">
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-header"><span class="card-title">ATS Discovery</span></div>
+        <p style="font-size:13px;color:var(--muted);margin:0 0 12px">Paste a careers URL to detect the ATS and identifier.</p>
+        <div class="toolbar" style="margin-bottom:0">
+          <input type="url" id="discoverUrlInput" placeholder="https://careers.smartrecruiters.com/Visa" style="flex:1;max-width:480px" />
+          <button class="btn btn-primary" id="btnDetectAts">Detect ATS</button>
+        </div>
+        <div id="discoverResultCard" class="hidden" style="margin-top:16px;padding:12px;border:1px solid var(--border);border-radius:8px;background:var(--surface2)"></div>
+      </div>
+
+      <div class="toolbar">
+        <select id="companyAtsFilter">
+          <option value="">All ATS types</option>
+          <option value="greenhouse">Greenhouse</option>
+          <option value="lever">Lever</option>
+          <option value="ashby">Ashby</option>
+          <option value="smartrecruiters">SmartRecruiters</option>
+          <option value="oracle_recruiting_cloud">Oracle Recruiting Cloud</option>
+          <option value="workday">Workday</option>
+          <option value="icims">iCIMS</option>
+        </select>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);cursor:pointer">
+          <input type="checkbox" id="companyPreferredFilter" /> Preferred only
+        </label>
+        <span id="companyCount" style="color:var(--muted);font-size:12px;margin-left:auto"></span>
+      </div>
+
+      <div class="card" style="padding:0">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>ATS</th>
+                <th>Identifier</th>
+                <th>Preferred</th>
+                <th>Enabled</th>
+                <th>Confidence</th>
+                <th>Last Verified</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="companiesTableBody"></tbody>
+          </table>
+        </div>
+        <div id="companiesEmpty" class="empty-state hidden">
+          <strong>No companies in registry</strong>
+          <p>Use ATS Discovery above or migrate from your old config on first load.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ====================================================
          DISCOVER
     ===================================================== -->
     <div id="tab-discover" class="tabPanel">
-      <div style="display:flex;gap:10px;align-items:center;margin-bottom:16px">
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:16px;flex-wrap:wrap">
         <h2 class="section-title" style="margin:0">Career Discovery</h2>
         <button class="btn btn-primary btn-sm" id="btnDiscover">&#10024; Analyze</button>
+        <span id="discoverAnalyzedAt" style="font-size:12px;color:var(--muted)"></span>
       </div>
 
       <div class="kpi-grid" id="discoverKpis"></div>
@@ -397,7 +474,7 @@
         <div class="tags" id="skillTags" style="margin-bottom:10px"></div>
         <div class="tag-input-wrap">
           <input type="text" id="skillInput" placeholder="Add a skill and press Enter" style="max-width:320px" />
-          <button class="btn btn-secondary btn-sm" id="btnExtractSkills">&#10024; Extract from Resume</button>
+          <button class="btn btn-secondary btn-sm" id="btnExtractSkills">&#10024; Parse Full Resume</button>
         </div>
       </div>
 

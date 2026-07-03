@@ -56,19 +56,26 @@ async function fetchLever(companies) {
 }
 
 async function fetchCompany(company) {
+  let lastStatus = null;
   for (const base of [BASE, BASE_EU]) {
     try {
       const res = await fetch(`${base}/${company}?mode=json`);
+      lastStatus = res.status;
       if (res.status === 404) continue;
       if (!res.ok) {
         console.warn(`Lever: skipping ${company} (${res.status})`);
         return [];
       }
       const json = await res.json();
+      if (!Array.isArray(json)) return [];
       return json.map((j) => normalizeJob(company, j));
     } catch (err) {
       console.warn(`Lever: error fetching ${company} from ${base}:`, err.message);
     }
+  }
+
+  if (lastStatus === 404) {
+    console.warn(`Lever: no postings board found for "${company}" — check slug at jobs.lever.co/${company}`);
   }
   return [];
 }

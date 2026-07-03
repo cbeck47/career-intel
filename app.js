@@ -12,7 +12,6 @@ const STATE_KEY = "career_intel_v1";
 function defaultState() {
   return {
     tracker: [],       // application records
-    discover: null,    // cached discovery result
     worth: null,       // cached worth result
   };
 }
@@ -29,11 +28,39 @@ function saveState(s) {
   localStorage.setItem(STATE_KEY, JSON.stringify(s));
 }
 
+async function migrateDiscoverFromLocalStorage() {
+  if (discoverResult) return;
+  try {
+    const parsed = JSON.parse(localStorage.getItem(STATE_KEY) ?? "{}");
+    const legacy = parsed.discover;
+    if (!legacy || typeof legacy !== "object") return;
+
+    const saved = await POST("/api/discover", {
+      result: legacy,
+      analyzed_at: parsed.discover_analyzed_at ?? new Date().toISOString(),
+    });
+    discoverResult = saved.result ?? null;
+    discoverAnalyzedAt = saved.analyzed_at ?? null;
+
+    delete parsed.discover;
+    delete parsed.discover_analyzed_at;
+    localStorage.setItem(STATE_KEY, JSON.stringify(parsed));
+    console.info("Migrated Career Discovery results from localStorage to server.");
+  } catch (err) {
+    console.warn("Discover migration failed:", err.message);
+  }
+}
+
 let state = loadState();
 
 // In-memory job + profile cache (loaded from server on boot)
 let allJobs = [];
 let profile = {};
+let discoverResult = null;
+let discoverAnalyzedAt = null;
+let companiesRegistry = [];
+let discoveryMinConfidence = 85;
+let lastDiscoveryResult = null;
 const charts = {};
 
 // ---------------------------------------------------------------------------
@@ -76,6 +103,7 @@ async function api(method, path, body) {
 
 function GET(path) { return api("GET", path); }
 function POST(path, body) { return api("POST", path, body); }
+function DELETE(path) { return api("DELETE", path); }
 
 // ---------------------------------------------------------------------------
 // Notifications
@@ -111,6 +139,9 @@ function sourceBadge(src) {
 function activateTab(tabId) {
   qsa(".tabBtn").forEach((b) => b.classList.toggle("active", b.dataset.tab === tabId));
   qsa(".tabPanel").forEach((p) => p.classList.toggle("visible", p.id === `tab-${tabId}`));
+  if (tabId === "discover" && discoverResult) {
+    requestAnimationFrame(() => drawCareerNetwork(discoverResult.adjacent_roles ?? []));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -233,36 +264,68 @@ async function saveProfile() {
   }
 }
 
-async function extractSkillsFromResume() {
+function hasValue(v) {
+  if (v == null) return false;
+  if (typeof v === "string") return v.trim().length > 0;
+  if (Array.isArray(v)) return v.length > 0;
+  return true;
+}
+
+function applyParsedProfileToForm(parsed) {
+  if (hasValue(parsed.name)) qs("#profName").value = parsed.name.trim();
+  if (hasValue(parsed.headline)) qs("#profHeadline").value = parsed.headline.trim();
+  if (hasValue(parsed.location)) qs("#profLocation").value = parsed.location.trim();
+  if (hasValue(parsed.email)) qs("#profEmail").value = parsed.email.trim();
+  if (parsed.years_experience != null && !Number.isNaN(parsed.years_experience)) {
+    qs("#profYOE").value = parsed.years_experience;
+  }
+  if (hasValue(parsed.certifications)) {
+    qs("#profCerts").value = parsed.certifications.join(", ");
+  }
+  if (hasValue(parsed.education)) qs("#profEducation").value = parsed.education.trim();
+  if (hasValue(parsed.skills)) renderSkillTags(parsed.skills);
+  if (hasValue(parsed.work_history)) renderWorkHistory(parsed.work_history);
+}
+
+async function parseResume() {
   const resumeText = qs("#profResume").value.trim();
-  if (!resumeText) { alert("Paste your resume text first."); return; }
+  if (!resumeText) {
+    showAlert("profileSaveAlert", "Paste your resume text first.", "error");
+    return;
+  }
+
   const btn = qs("#btnExtractSkills");
   btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span> Extracting…';
+  btn.innerHTML = '<span class="spinner"></span> Parsing…';
+
   try {
-    const res = await POST("/api/ai/match", { job_id: "__extract_skills__" }).catch(async () => {
-      // Fallback: simple regex extraction on client
-      return null;
-    });
-    // Use a dedicated extract endpoint via worth call or just local heuristic
-    const words = resumeText.match(/\b[A-Z][A-Za-z+#.]{2,}\b/g) ?? [];
-    const freq = {};
-    words.forEach((w) => { freq[w] = (freq[w] ?? 0) + 1; });
-    const candidates = Object.entries(freq)
-      .filter(([w, c]) => c >= 2 && w.length > 3)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 40)
-      .map(([w]) => w);
-    const existing = new Set(skillTagsData.map((s) => s.toLowerCase()));
-    const newSkills = candidates.filter((s) => !existing.has(s.toLowerCase()));
-    renderSkillTags([...skillTagsData, ...newSkills]);
-    btn.innerHTML = `&#10024; Extracted ${newSkills.length} skills`;
+    const parsed = await POST("/api/ai/parse-resume", { resume_text: resumeText });
+    applyParsedProfileToForm(parsed);
+
+    const filled = [
+      hasValue(parsed.name) && "name",
+      hasValue(parsed.headline) && "headline",
+      hasValue(parsed.location) && "location",
+      hasValue(parsed.email) && "email",
+      parsed.years_experience != null && "experience",
+      hasValue(parsed.skills) && "skills",
+      hasValue(parsed.certifications) && "certifications",
+      hasValue(parsed.education) && "education",
+      hasValue(parsed.work_history) && "work history",
+    ].filter(Boolean);
+
+    showAlert(
+      "profileSaveAlert",
+      `Resume parsed. Filled: ${filled.join(", ") || "no fields"}. Review and click Save Profile.`,
+      "success",
+      6000
+    );
+    btn.innerHTML = "&#10024; Parse Full Resume";
   } catch (err) {
-    alert("Extraction error: " + err.message);
-    btn.innerHTML = '&#10024; Extract from Resume';
+    showAlert("profileSaveAlert", `Parse error: ${err.message}`, "error", 6000);
+    btn.innerHTML = "&#10024; Parse Full Resume";
   } finally {
     btn.disabled = false;
-    setTimeout(() => { btn.innerHTML = '&#10024; Extract from Resume'; }, 3000);
   }
 }
 
@@ -270,20 +333,61 @@ async function extractSkillsFromResume() {
 // JOBS TAB
 // ---------------------------------------------------------------------------
 
+function jobLocationText(job) {
+  return (job.location ?? "").toLowerCase();
+}
+
+function jobIsRemote(job) {
+  return job.remote === true || jobLocationText(job).includes("remote");
+}
+
+function jobMatchesRemoteFilter(job, remoteFilter) {
+  if (!remoteFilter) return true;
+  if (remoteFilter === "remote") return jobIsRemote(job);
+  if (remoteFilter === "onsite") return !jobIsRemote(job);
+  return true;
+}
+
+function jobMatchesLocationFilter(job, query) {
+  if (!query) return true;
+  return jobLocationText(job).includes(query.toLowerCase());
+}
+
+function populateJobCompanyFilter() {
+  const select = qs("#jobCompanyFilter");
+  if (!select) return;
+  const prev = select.value;
+  const companies = [...new Set(allJobs.map((j) => j.company).filter(Boolean))].sort((a, b) =>
+    a.localeCompare(b)
+  );
+  select.innerHTML =
+    '<option value="">All companies</option>' +
+    companies.map((c) => `<option value="${escHtml(c)}">${escHtml(c)}</option>`).join("");
+  if (prev && companies.includes(prev)) select.value = prev;
+}
+
 function filteredJobs() {
   const search = qs("#jobSearch").value.toLowerCase();
   const source = qs("#jobSourceFilter").value;
+  const company = qs("#jobCompanyFilter").value;
   const sector = qs("#jobSectorFilter").value;
+  const location = qs("#jobLocationFilter").value.trim();
+  const remoteFilter = qs("#jobRemoteFilter").value;
   const sort = qs("#jobSortSelect").value;
 
   let jobs = allJobs.filter((j) => {
     if (source && j.source !== source) return false;
+    if (company && j.company !== company) return false;
     if (sector && j.sector !== sector) return false;
     if (search && !`${j.title} ${j.company}`.toLowerCase().includes(search)) return false;
+    if (!jobMatchesLocationFilter(j, location)) return false;
+    if (!jobMatchesRemoteFilter(j, remoteFilter)) return false;
     return true;
   });
 
-  if (sort === "score") {
+  if (sort === "heuristic") {
+    jobs.sort((a, b) => (b.heuristic_score ?? -1) - (a.heuristic_score ?? -1));
+  } else if (sort === "score") {
     jobs.sort((a, b) => (b.ai_score?.overall_score ?? -1) - (a.ai_score?.overall_score ?? -1));
   } else if (sort === "recent") {
     jobs.sort((a, b) => new Date(b.posted_at ?? 0) - new Date(a.posted_at ?? 0));
@@ -291,6 +395,17 @@ function filteredJobs() {
     jobs.sort((a, b) => (b.salary_max ?? 0) - (a.salary_max ?? 0));
   }
   return jobs;
+}
+
+function fitScorePill(job) {
+  const aiScore = job.ai_score?.overall_score;
+  if (aiScore != null) {
+    return `<span class="score-pill ${scoreClass(aiScore)}">${aiScore}%</span>`;
+  }
+  if (job.heuristic_score != null) {
+    return `<span class="score-pill score-heuristic">${job.heuristic_score}%</span>`;
+  }
+  return `<button class="btn btn-secondary btn-sm score-job" data-id="${escHtml(job.id)}">Score</button>`;
 }
 
 function renderJobsTable() {
@@ -302,10 +417,7 @@ function renderJobsTable() {
   if (!jobs.length) { tbody.innerHTML = ""; return; }
 
   tbody.innerHTML = jobs.map((j) => {
-    const score = j.ai_score?.overall_score;
-    const scorePill = score != null
-      ? `<span class="score-pill ${scoreClass(score)}">${score}%</span>`
-      : `<button class="btn btn-secondary btn-sm score-job" data-id="${escHtml(j.id)}">Score</button>`;
+    const scorePill = fitScorePill(j);
     return `<tr>
       <td><a href="${escHtml(j.url)}" target="_blank">${escHtml(j.title)}</a></td>
       <td>${escHtml(j.company)}</td>
@@ -348,6 +460,55 @@ async function scoreJob(jobId, btn) {
   }
 }
 
+async function rankAllJobs() {
+  const btn = qs("#btnRank");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Ranking…';
+  try {
+    const res = await POST("/api/jobs/rank");
+    allJobs = await GET("/api/jobs");
+    qs("#jobSortSelect").value = "heuristic";
+    renderJobsTable();
+    renderDashboard();
+    btn.innerHTML = `&#10003; Ranked (${res.ranked})`;
+  } catch (err) {
+    alert("Rank error: " + err.message);
+    btn.innerHTML = "Rank Jobs";
+  } finally {
+    btn.disabled = false;
+    setTimeout(() => { btn.innerHTML = "Rank Jobs"; }, 4000);
+  }
+}
+
+async function deepScoreTop50() {
+  if (!allJobs.some((j) => j.heuristic_score != null)) {
+    alert("Rank jobs first to select top candidates for deep scoring.");
+    return;
+  }
+  if (!confirm("Deep score will analyze up to 50 jobs via OpenAI (~2 min, small API cost). Continue?")) {
+    return;
+  }
+
+  const btn = qs("#btnDeepScore");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Scoring…';
+  try {
+    const res = await POST("/api/jobs/deep-score");
+    allJobs = await GET("/api/jobs");
+    populateJobCompanyFilter();
+    renderJobsTable();
+    renderDashboard();
+    btn.innerHTML = `&#10003; Scored (${res.scored}/${res.total})`;
+    if (res.errors) alert(`${res.errors} jobs failed to score.`);
+  } catch (err) {
+    alert("Deep score error: " + err.message);
+    btn.innerHTML = "Deep Score Top 50";
+  } finally {
+    btn.disabled = false;
+    setTimeout(() => { btn.innerHTML = "Deep Score Top 50"; }, 4000);
+  }
+}
+
 async function syncJobs() {
   const btn = qs("#btnSync");
   btn.disabled = true;
@@ -355,6 +516,7 @@ async function syncJobs() {
   try {
     const res = await POST("/api/jobs/sync");
     allJobs = await GET("/api/jobs");
+    populateJobCompanyFilter();
     renderJobsTable();
     renderDashboard();
     populateTailorSelect();
@@ -372,53 +534,230 @@ async function syncJobs() {
 // DASHBOARD
 // ---------------------------------------------------------------------------
 
+function isFollowUpDue(followUp) {
+  if (!followUp) return false;
+  const d = new Date(followUp);
+  if (Number.isNaN(d.getTime())) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  d.setHours(0, 0, 0, 0);
+  return d <= today;
+}
+
+function buildDashboardActions() {
+  const scored = allJobs.filter((j) => j.ai_score);
+  const ranked = allJobs.filter((j) => j.heuristic_score != null);
+  const actions = [];
+
+  if (!profile.name?.trim() || !(profile.skills ?? []).length) {
+    actions.push({ label: "Complete your profile — add name, skills, and resume", tab: "profile" });
+  }
+  if (!discoverResult) {
+    actions.push({ label: "Run Career Discovery to find adjacent roles", tab: "discover" });
+  }
+  if (!companiesRegistry.length) {
+    actions.push({ label: "Add companies to your registry", tab: "companies" });
+  }
+  if (allJobs.length === 0) {
+    actions.push({ label: "Sync jobs from your configured sources", tab: "jobs" });
+  } else if (ranked.length === 0) {
+    actions.push({ label: "Rank jobs against your profile", action: "rank", tab: "jobs" });
+  } else if (scored.length === 0) {
+    actions.push({ label: "Deep score top 50 for AI fit analysis", action: "deep-score", tab: "jobs" });
+  }
+
+  state.tracker
+    .filter((t) => isFollowUpDue(t.follow_up))
+    .slice(0, 3)
+    .forEach((t) => {
+      actions.push({
+        label: `Follow up on ${t.title} at ${t.company}`,
+        tab: "tracker",
+      });
+    });
+
+  return actions.slice(0, 5);
+}
+
+function renderDashboardActions() {
+  const actions = buildDashboardActions();
+  const wrap = qs("#dashActionList");
+  if (!actions.length) {
+    wrap.innerHTML = `<p style="color:var(--muted);font-size:13px">You're caught up — check back after syncing or scoring jobs.</p>`;
+    return;
+  }
+  wrap.innerHTML = actions.map((a, i) =>
+    `<div class="insight-item dash-action-item" data-action-idx="${i}">${escHtml(a.label)}</div>`
+  ).join("");
+  qsa(".dash-action-item", wrap).forEach((el) => {
+    el.addEventListener("click", () => {
+      const action = actions[parseInt(el.dataset.actionIdx, 10)];
+      if (action?.action === "rank") {
+        activateTab("jobs");
+        rankAllJobs();
+        return;
+      }
+      if (action?.action === "deep-score") {
+        activateTab("jobs");
+        deepScoreTop50();
+        return;
+      }
+      if (action?.tab) activateTab(action.tab);
+    });
+  });
+}
+
+function buildDashboardOpportunities(scored) {
+  const opportunities = [];
+  const minHeuristic = 30;
+  const topScored = [...scored]
+    .sort((a, b) => (b.ai_score?.overall_score ?? 0) - (a.ai_score?.overall_score ?? 0))
+    .slice(0, 5);
+
+  topScored.forEach((j) => {
+    opportunities.push({
+      source: "scored",
+      title: j.title,
+      subtitle: `${j.company} · ${j.source}`,
+      score: j.ai_score?.overall_score,
+      url: j.url,
+    });
+  });
+
+  if (opportunities.length < 5) {
+    const topHeuristic = [...allJobs]
+      .filter((j) => !j.ai_score && (j.heuristic_score ?? 0) >= minHeuristic)
+      .sort((a, b) => (b.heuristic_score ?? 0) - (a.heuristic_score ?? 0))
+      .slice(0, 5 - opportunities.length);
+
+    topHeuristic.forEach((j) => {
+      opportunities.push({
+        source: "heuristic",
+        title: j.title,
+        subtitle: `${j.company} · ${j.source}`,
+        score: j.heuristic_score,
+        url: j.url,
+      });
+    });
+  }
+
+  if (opportunities.length < 5 && discoverResult?.adjacent_roles?.length) {
+    const used = new Set(opportunities.map((o) => o.title.toLowerCase()));
+    const adjacent = [...discoverResult.adjacent_roles]
+      .sort((a, b) => (b.avg_fit ?? 0) - (a.avg_fit ?? 0));
+    for (const role of adjacent) {
+      if (opportunities.length >= 5) break;
+      if (used.has(role.title.toLowerCase())) continue;
+      opportunities.push({
+        source: "discover",
+        title: role.title,
+        subtitle: role.description ?? "Adjacent role from Career Discovery",
+        score: role.avg_fit,
+        tab: "discover",
+      });
+      used.add(role.title.toLowerCase());
+    }
+  }
+
+  return opportunities;
+}
+
 function renderDashboard() {
   const scored = allJobs.filter((j) => j.ai_score);
-  const avgScore = scored.length
-    ? Math.round(scored.reduce((s, j) => s + (j.ai_score.overall_score ?? 0), 0) / scored.length)
-    : 0;
-  const topScore = scored.length
+  const ranked = allJobs.filter((j) => j.heuristic_score != null);
+  const topScoredFit = scored.length
     ? Math.max(...scored.map((j) => j.ai_score?.overall_score ?? 0))
     : 0;
-  const applied = state.tracker.filter((t) => t.status === "Applied").length;
-  const interviewing = state.tracker.filter((t) => ["Phone Screen","Interview"].includes(t.status)).length;
+  const topHeuristicFit = ranked.length
+    ? Math.max(...ranked.map((j) => j.heuristic_score ?? 0))
+    : 0;
+  const topDiscoverFit = discoverResult?.adjacent_roles?.length
+    ? Math.max(...discoverResult.adjacent_roles.map((r) => r.avg_fit ?? 0))
+    : 0;
+  const bestMatch = topScoredFit || topHeuristicFit || topDiscoverFit;
+  const interviewing = state.tracker.filter((t) => ["Phone Screen", "Interview"].includes(t.status)).length;
+  const unscored = allJobs.length - scored.length;
+  const discoverStatus = discoverAnalyzedAt
+    ? new Date(discoverAnalyzedAt).toLocaleDateString()
+    : "Not run";
 
-  qs("#dashKpis").innerHTML = [
-    { v: allJobs.length,      l: "Total Jobs" },
-    { v: scored.length,       l: "Jobs Scored" },
-    { v: avgScore ? avgScore + "%" : "—", l: "Avg Fit Score" },
-    { v: topScore ? topScore + "%" : "—", l: "Best Match" },
+  const kpis = [
+    { v: allJobs.length, l: "Total Jobs" },
+    { v: scored.length, l: "Jobs Scored" },
+    { v: unscored, l: "Unscored" },
+    { v: bestMatch ? bestMatch + "%" : "—", l: "Best Match" },
     { v: state.tracker.length, l: "Applications" },
-    { v: applied,              l: "Applied" },
-    { v: interviewing,         l: "Interviewing" },
-  ].map((k) => `<div class="kpi"><div class="kpi-value">${escHtml(String(k.v))}</div><div class="kpi-label">${escHtml(k.l)}</div></div>`).join("");
+    { v: interviewing, l: "Interviewing" },
+    { v: discoverStatus, l: "Discover" },
+  ];
 
-  // Top 5 jobs
-  const top = [...scored].sort((a, b) => (b.ai_score?.overall_score ?? 0) - (a.ai_score?.overall_score ?? 0)).slice(0, 5);
-  qs("#dashTopJobs").innerHTML = top.length
-    ? top.map((j) => `
+  if (state.worth?.market_value?.expected) {
+    kpis.push({
+      v: "$" + Math.round(state.worth.market_value.expected / 1000) + "k",
+      l: "Est. Worth",
+    });
+  }
+
+  qs("#dashKpis").innerHTML = kpis
+    .map((k) => `<div class="kpi"><div class="kpi-value">${escHtml(String(k.v))}</div><div class="kpi-label">${escHtml(k.l)}</div></div>`)
+    .join("");
+
+  const opportunities = buildDashboardOpportunities(scored);
+  if (opportunities.length) {
+    qs("#dashTopJobs").innerHTML = opportunities.map((o) => {
+      const badge = o.source === "discover"
+        ? `<span class="dash-source-badge dash-source-discover">Discover</span>`
+        : o.source === "heuristic"
+          ? `<span class="dash-source-badge dash-source-heuristic">Ranked</span>`
+          : `<span class="dash-source-badge dash-source-scored">Scored</span>`;
+      const pillClass = o.source === "heuristic" ? "score-heuristic" : scoreClass(o.score);
+      const titleHtml = o.url
+        ? `<a href="${escHtml(o.url)}" target="_blank" style="color:var(--text);font-weight:600;font-size:13px">${escHtml(o.title)}</a>${badge}`
+        : `<span class="dash-opportunity-link" data-tab="${escHtml(o.tab ?? "discover")}" style="color:var(--text);font-weight:600;font-size:13px;cursor:pointer">${escHtml(o.title)}</span>${badge}`;
+      return `
         <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">
           <div>
-            <a href="${escHtml(j.url)}" target="_blank" style="color:var(--text);font-weight:600;font-size:13px">${escHtml(j.title)}</a>
-            <div style="font-size:11px;color:var(--muted)">${escHtml(j.company)} · ${sourceBadge(j.source)}</div>
+            ${titleHtml}
+            <div style="font-size:11px;color:var(--muted)">${escHtml(o.subtitle)}</div>
           </div>
-          <span class="score-pill ${scoreClass(j.ai_score?.overall_score)}">${j.ai_score?.overall_score}%</span>
-        </div>`).join("")
-    : `<p style="color:var(--muted);font-size:13px">Score some jobs to see top matches here.</p>`;
+          <span class="score-pill ${pillClass}">${o.score ?? "—"}%</span>
+        </div>`;
+    }).join("");
+    qsa(".dash-opportunity-link", qs("#dashTopJobs")).forEach((el) => {
+      el.addEventListener("click", () => activateTab(el.dataset.tab));
+    });
+  } else {
+    const cta = !discoverResult
+      ? "Run Analyze on the Discover tab to find adjacent roles."
+      : allJobs.length
+        ? allJobs.some((j) => j.heuristic_score != null)
+          ? "Deep score top matches for AI fit analysis."
+          : "Rank jobs to surface your best local matches."
+        : "Sync jobs to build your opportunity pool.";
+    qs("#dashTopJobs").innerHTML = `<p style="color:var(--muted);font-size:13px">${escHtml(cta)}</p>`;
+  }
 
-  // Skill gap chart
   const allMissing = scored.flatMap((j) => j.ai_score?.missing_skills ?? []);
   const freq = {};
   allMissing.forEach((s) => { freq[s] = (freq[s] ?? 0) + 1; });
-  const top10 = Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, 8);
+  let skillGapEntries = Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, 8);
+  if (!skillGapEntries.length && discoverResult?.top_skill_gaps?.length) {
+    skillGapEntries = discoverResult.top_skill_gaps
+      .slice(0, 8)
+      .map((g) => [g.skill, g.frequency ?? 1]);
+  }
 
   destroyChart("skillGap");
-  if (top10.length) {
-    charts.skillGap = new Chart(qs("#skillGapChart"), {
+  const skillCanvas = qs("#skillGapChart");
+  const skillEmpty = qs("#skillGapEmpty");
+  if (skillGapEntries.length) {
+    setHidden(skillCanvas, false);
+    setHidden(skillEmpty, true);
+    charts.skillGap = new Chart(skillCanvas, {
       type: "bar",
       data: {
-        labels: top10.map(([s]) => s),
-        datasets: [{ data: top10.map(([, c]) => c), backgroundColor: "#6c8cff88", borderColor: "#6c8cff", borderWidth: 1 }],
+        labels: skillGapEntries.map(([s]) => s),
+        datasets: [{ data: skillGapEntries.map(([, c]) => c), backgroundColor: "#6c8cff88", borderColor: "#6c8cff", borderWidth: 1 }],
       },
       options: {
         indexAxis: "y",
@@ -429,18 +768,34 @@ function renderDashboard() {
         },
       },
     });
+  } else {
+    setHidden(skillCanvas, true);
+    setHidden(skillEmpty, false);
+    skillEmpty.textContent = discoverResult
+      ? "No skill gaps identified yet."
+      : "Run Discover Analyze to identify skill gaps.";
   }
 
-  // Insights
-  const insights = scored.flatMap((j) => {
+  renderDashboardActions();
+
+  const scoredInsights = scored.flatMap((j) => {
     const r = [];
-    if ((j.ai_score?.overall_score ?? 0) >= 85) r.push(`Strong match (${j.ai_score.overall_score}%) for ${j.title} at ${j.company}.`);
-    if (j.ai_score?.missing_skills?.length) r.push(`Learning ${j.ai_score.missing_skills[0]} could improve your fit for ${j.title}.`);
+    if ((j.ai_score?.overall_score ?? 0) >= 85) {
+      r.push(`Strong match (${j.ai_score.overall_score}%) for ${j.title} at ${j.company}.`);
+    }
+    if (j.ai_score?.missing_skills?.length) {
+      r.push(`Learning ${j.ai_score.missing_skills[0]} could improve your fit for ${j.title}.`);
+    }
     return r;
-  }).slice(0, 5);
+  });
+  const insights = [
+    ...(discoverResult?.career_insights ?? []).slice(0, 3),
+    ...scoredInsights.slice(0, 2),
+  ].slice(0, 5);
+
   qs("#dashInsights").innerHTML = insights.length
     ? insights.map((i) => `<div class="insight-item">${escHtml(i)}</div>`).join("")
-    : `<p style="color:var(--muted);font-size:13px">Score some jobs to generate insights.</p>`;
+    : `<p style="color:var(--muted);font-size:13px">Run Discover Analyze, rank jobs, or deep score top matches to generate insights.</p>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -452,10 +807,11 @@ async function runDiscover() {
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Analyzing…';
   try {
-    const result = await POST("/api/ai/discover");
-    state.discover = result;
-    saveState(state);
-    renderDiscoverTab(result);
+    const saved = await POST("/api/ai/discover");
+    discoverResult = saved.result ?? null;
+    discoverAnalyzedAt = saved.analyzed_at ?? null;
+    renderDiscoverTab(discoverResult);
+    renderDashboard();
   } catch (err) {
     alert("Discovery error: " + err.message);
   } finally {
@@ -465,6 +821,13 @@ async function runDiscover() {
 }
 
 function renderDiscoverTab(d) {
+  const analyzedEl = qs("#discoverAnalyzedAt");
+  if (analyzedEl) {
+    analyzedEl.textContent = discoverAnalyzedAt
+      ? `Last analyzed: ${new Date(discoverAnalyzedAt).toLocaleString()}`
+      : "";
+  }
+
   if (!d) {
     qs("#discoverKpis").innerHTML = "";
     qs("#adjacentRolesList").innerHTML = `<p style="color:var(--muted);font-size:13px">Click "Analyze" to discover career opportunities.</p>`;
@@ -493,24 +856,34 @@ function renderDiscoverTab(d) {
   destroyChart("sector");
   const hm = d.sector_heatmap ?? [];
   if (hm.length) {
-    charts.sector = new Chart(qs("#sectorChart"), {
-      type: "bar",
-      data: {
-        labels: hm.map((s) => s.sector),
-        datasets: [{ label: "Avg Fit %", data: hm.map((s) => s.avg_fit), backgroundColor: "#a78bfa88", borderColor: "#a78bfa", borderWidth: 1 }],
-      },
-      options: {
-        plugins: { legend: { display: false } },
-        scales: {
-          x: { ticks: { color: "#8892b0" }, grid: { color: "#2e3154" } },
-          y: { ticks: { color: "#8892b0" }, grid: { color: "#2e3154" }, suggestedMax: 100 },
+    try {
+      charts.sector = new Chart(qs("#sectorChart"), {
+        type: "bar",
+        data: {
+          labels: hm.map((s) => s.sector),
+          datasets: [{
+            label: "Jobs in pool",
+            data: hm.map((s) => s.job_count),
+            backgroundColor: "#a78bfa88",
+            borderColor: "#a78bfa",
+            borderWidth: 1,
+          }],
         },
-      },
-    });
+        options: {
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { color: "#8892b0" }, grid: { color: "#2e3154" } },
+            y: { ticks: { color: "#8892b0" }, grid: { color: "#2e3154" }, beginAtZero: true },
+          },
+        },
+      });
+    } catch (chartErr) {
+      console.warn("Sector chart render failed:", chartErr.message);
+    }
   }
 
-  // Career network canvas
-  drawCareerNetwork(d.adjacent_roles ?? []);
+  // Career network canvas — defer until layout is ready
+  requestAnimationFrame(() => drawCareerNetwork(d.adjacent_roles ?? []));
 
   // Skill gaps
   const gaps = d.top_skill_gaps ?? [];
@@ -544,45 +917,92 @@ function renderDiscoverTab(d) {
   ).join("") || `<p style="color:var(--muted);font-size:13px">No insights yet.</p>`;
 }
 
+function setupDiscoveryCanvas(canvas) {
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  const W = Math.max(Math.round(rect.width || canvas.clientWidth || 700), 320);
+  const H = Math.max(Math.round(rect.height || canvas.clientHeight || 420), 280);
+  canvas.width = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
+  canvas.style.width = `${W}px`;
+  canvas.style.height = `${H}px`;
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { ctx, W, H };
+}
+
+function wrapCanvasLabel(ctx, text, maxWidth, maxLines = 2) {
+  const words = String(text).split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
+  const lines = [];
+  let line = "";
+  for (const word of words) {
+    const candidate = line ? `${line} ${word}` : word;
+    if (ctx.measureText(candidate).width > maxWidth && line) {
+      lines.push(line);
+      line = word;
+      if (lines.length >= maxLines) break;
+    } else {
+      line = candidate;
+    }
+  }
+  if (lines.length < maxLines && line) lines.push(line);
+  if (lines.length === maxLines) {
+    let last = lines[maxLines - 1];
+    while (last.length > 3 && ctx.measureText(`${last}…`).width > maxWidth) {
+      last = last.slice(0, -1);
+    }
+    if (words.join(" ").length > lines.join(" ").length) {
+      lines[maxLines - 1] = `${last}…`;
+    }
+  }
+  return lines;
+}
+
 function drawCareerNetwork(adjacentRoles) {
   const canvas = qs("#discoveryCanvas");
-  const ctx = canvas.getContext("2d");
-  const W = canvas.offsetWidth || 700;
-  const H = canvas.offsetHeight || 420;
-  canvas.width = W;
-  canvas.height = H;
+  if (!canvas) return;
+  const { ctx, W, H } = setupDiscoveryCanvas(canvas);
   ctx.clearRect(0, 0, W, H);
 
   if (!adjacentRoles.length) {
     ctx.fillStyle = "#8892b0";
     ctx.font = "14px sans-serif";
     ctx.textAlign = "center";
-    ctx.fillText("Run Analyze to see your career network", W / 2, H / 2);
+    ctx.textBaseline = "middle";
+    ctx.fillText(
+      discoverResult ? "No adjacent roles identified yet — score jobs for richer results" : "Run Analyze to see your career network",
+      W / 2,
+      H / 2
+    );
     return;
   }
 
+  const padX = 90;
+  const padTop = 50;
+  const padBottom = 70;
   const cx = W / 2;
-  const cy = H / 2;
-  const R = Math.min(W, H) * 0.35;
+  const cy = padTop + (H - padTop - padBottom) / 2;
+  const R = Math.min(W - padX * 2, H - padTop - padBottom) * 0.34;
+  const count = Math.min(adjacentRoles.length, 8);
 
   const nodes = [
-    { label: profile.headline || "Your Role", x: cx, y: cy, r: 36, isCenter: true, fit: 100 },
-    ...adjacentRoles.slice(0, 8).map((role, i) => {
-      const angle = (i / Math.min(adjacentRoles.length, 8)) * Math.PI * 2 - Math.PI / 2;
+    { label: profile.headline || "Your Role", x: cx, y: cy, r: 28, isCenter: true, fit: 100 },
+    ...adjacentRoles.slice(0, count).map((role, i) => {
+      const angle = (i / count) * Math.PI * 2 - Math.PI / 2;
       const fit = role.avg_fit ?? 70;
-      const dist = R * (1 + (100 - fit) / 200);
+      const dist = R * (0.85 + (100 - fit) / 400);
       return {
         label: role.title,
         x: cx + Math.cos(angle) * dist,
         y: cy + Math.sin(angle) * dist,
-        r: 12 + (fit / 100) * 18,
+        r: 10 + (fit / 100) * 12,
         isCenter: false,
         fit,
       };
     }),
   ];
 
-  // Draw edges
   nodes.slice(1).forEach((n) => {
     ctx.beginPath();
     ctx.moveTo(cx, cy);
@@ -592,7 +1012,6 @@ function drawCareerNetwork(adjacentRoles) {
     ctx.stroke();
   });
 
-  // Draw nodes
   nodes.forEach((n) => {
     ctx.beginPath();
     ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
@@ -602,19 +1021,24 @@ function drawCareerNetwork(adjacentRoles) {
     ctx.lineWidth = 2;
     ctx.stroke();
 
-    // Label
-    ctx.fillStyle = "#e2e8f0";
-    ctx.font = `${n.isCenter ? "bold " : ""}11px sans-serif`;
     ctx.textAlign = "center";
-    const words = n.label.split(" ");
-    words.forEach((word, wi) => {
-      ctx.fillText(word, n.x, n.y + n.r + 13 + wi * 13);
-    });
+    ctx.textBaseline = "alphabetic";
+
     if (!n.isCenter) {
-      ctx.fillStyle = "#8892b0";
-      ctx.font = "10px sans-serif";
+      ctx.fillStyle = "#e2e8f0";
+      ctx.font = "bold 11px sans-serif";
       ctx.fillText(`${n.fit}%`, n.x, n.y + 4);
     }
+
+    ctx.fillStyle = "#e2e8f0";
+    ctx.font = `${n.isCenter ? "bold " : ""}11px sans-serif`;
+    const labelWidth = n.isCenter ? 160 : 120;
+    const lines = wrapCanvasLabel(ctx, n.label, labelWidth, n.isCenter ? 3 : 2);
+    const lineHeight = 13;
+    const labelStartY = n.y + n.r + 14;
+    lines.forEach((line, wi) => {
+      ctx.fillText(line, n.x, labelStartY + wi * lineHeight);
+    });
   });
 }
 
@@ -868,6 +1292,7 @@ function saveApp() {
   saveState(state);
   closeAppModal();
   renderTracker();
+  renderDashboard();
 }
 
 function renderTracker() {
@@ -930,6 +1355,202 @@ function renderTracker() {
 }
 
 // ---------------------------------------------------------------------------
+// COMPANIES TAB
+// ---------------------------------------------------------------------------
+
+function filteredCompanies() {
+  const ats = qs("#companyAtsFilter")?.value ?? "";
+  const preferredOnly = qs("#companyPreferredFilter")?.checked ?? false;
+
+  return companiesRegistry.filter((company) => {
+    if (ats && company.ats_type !== ats) return false;
+    if (preferredOnly && !company.preferred) return false;
+    return true;
+  });
+}
+
+function confidenceClass(score) {
+  if (score == null) return "";
+  if (score >= 85) return "score-high";
+  if (score >= 60) return "score-mid";
+  return "score-low";
+}
+
+function renderCompaniesTable() {
+  const companies = filteredCompanies();
+  const tbody = qs("#companiesTableBody");
+  const countEl = qs("#companyCount");
+  if (countEl) countEl.textContent = `${companies.length} of ${companiesRegistry.length} companies`;
+  setHidden(qs("#companiesEmpty"), companies.length > 0);
+
+  if (!companies.length) {
+    tbody.innerHTML = "";
+    return;
+  }
+
+  tbody.innerHTML = companies.map((company) => {
+    const verified = company.last_verified
+      ? new Date(company.last_verified).toLocaleDateString()
+      : "—";
+    const confidence = company.discovery_confidence;
+    return `<tr data-id="${escHtml(company.id)}">
+      <td>
+        <div>${escHtml(company.name)}</div>
+        ${company.application_url ? `<div style="font-size:11px;color:var(--muted)">${escHtml(company.application_url)}</div>` : ""}
+        ${company.platform ? `<div style="font-size:11px;color:var(--muted)">${escHtml(company.platform)}</div>` : ""}
+      </td>
+      <td>${sourceBadge(company.ats_type)}</td>
+      <td><code style="font-size:11px">${escHtml(company.ats_identifier)}</code></td>
+      <td><input type="checkbox" class="company-preferred" data-id="${escHtml(company.id)}" ${company.preferred ? "checked" : ""} /></td>
+      <td><input type="checkbox" class="company-enabled" data-id="${escHtml(company.id)}" ${company.enabled ? "checked" : ""} /></td>
+      <td>${confidence != null ? `<span class="score-pill ${confidenceClass(confidence)}">${confidence}%</span>` : "—"}</td>
+      <td style="font-size:12px;color:var(--muted)">${escHtml(verified)}</td>
+      <td><button class="btn btn-secondary btn-sm company-delete" data-id="${escHtml(company.id)}">Delete</button></td>
+    </tr>`;
+  }).join("");
+
+  qsa(".company-preferred", tbody).forEach((el) => {
+    el.addEventListener("change", () => toggleCompanyField(el.dataset.id, "preferred", el.checked));
+  });
+  qsa(".company-enabled", tbody).forEach((el) => {
+    el.addEventListener("change", () => toggleCompanyField(el.dataset.id, "enabled", el.checked));
+  });
+  qsa(".company-delete", tbody).forEach((el) => {
+    el.addEventListener("click", () => deleteCompany(el.dataset.id));
+  });
+}
+
+function renderDiscoveryResult(result) {
+  const card = qs("#discoverResultCard");
+  if (!result || result.error) {
+    card.innerHTML = `<p style="color:var(--red);font-size:13px">${escHtml(result?.error ?? "Detection failed")}</p>`;
+    setHidden(card, false);
+    return;
+  }
+
+  const canAutoAdd = result.confidence >= discoveryMinConfidence;
+  const supportedNote = result.supported
+    ? "Sync supported"
+    : "Discovery only — no fetch adapter yet";
+
+  card.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
+      <div>
+        <div style="font-weight:600;font-size:14px">${escHtml(result.name ?? "Unknown")}</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:4px">
+          ${sourceBadge(result.ats_type)} · <code>${escHtml(result.ats_identifier ?? "—")}</code>
+        </div>
+        <div style="font-size:12px;color:var(--muted);margin-top:4px">${escHtml(result.careers_url ?? "")}</div>
+        ${result.application_url ? `<div style="font-size:12px;color:var(--muted);margin-top:4px">Apply: ${escHtml(result.application_url)}</div>` : ""}
+        ${result.platform ? `<div style="font-size:12px;color:var(--muted);margin-top:4px">${escHtml(result.platform)}</div>` : ""}
+        <div style="font-size:12px;color:var(--muted);margin-top:4px">${escHtml(supportedNote)}</div>
+      </div>
+      <span class="score-pill ${confidenceClass(result.confidence)}">${result.confidence ?? 0}% confidence</span>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+      <button class="btn btn-primary btn-sm" id="btnAddDiscovered" ${canAutoAdd ? "" : "disabled"}>
+        Add to registry
+      </button>
+      <button class="btn btn-secondary btn-sm" id="btnAddDiscoveredAnyway" ${canAutoAdd ? 'style="display:none"' : ""}>
+        Add anyway
+      </button>
+    </div>
+    ${!canAutoAdd ? `<p style="font-size:12px;color:var(--yellow);margin:8px 0 0">Below auto-add threshold (${discoveryMinConfidence}%). Review before adding.</p>` : ""}
+  `;
+  setHidden(card, false);
+
+  qs("#btnAddDiscovered")?.addEventListener("click", () => saveDiscoveredCompany(result));
+  qs("#btnAddDiscoveredAnyway")?.addEventListener("click", () => {
+    if (confirm("Confidence is low. Add this company anyway?")) {
+      saveDiscoveredCompany(result);
+    }
+  });
+}
+
+async function detectCompanyAts() {
+  const url = qs("#discoverUrlInput").value.trim();
+  if (!url) return;
+
+  const btn = qs("#btnDetectAts");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Detecting…';
+  try {
+    const result = await POST("/api/companies/discover", { url });
+    lastDiscoveryResult = result;
+    renderDiscoveryResult(result);
+  } catch (err) {
+    renderDiscoveryResult({ error: err.message });
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = "Detect ATS";
+  }
+}
+
+async function saveDiscoveredCompany(result) {
+  const company = {
+    name: result.name,
+    ats_type: result.ats_type,
+    ats_identifier: result.ats_identifier,
+    careers_url: result.careers_url,
+    application_url: result.application_url ?? null,
+    platform: result.platform ?? null,
+    discovery_confidence: result.confidence,
+    last_verified: new Date().toISOString(),
+    preferred: true,
+    enabled: result.supported !== false,
+    notes: result.supported ? "" : "ATS detected but fetch adapter not available yet",
+  };
+
+  try {
+    const saved = await POST("/api/companies", company);
+    const existingIdx = companiesRegistry.findIndex((item) => item.id === saved.id);
+    if (existingIdx >= 0) companiesRegistry[existingIdx] = saved;
+    else companiesRegistry.push(saved);
+    companiesRegistry.sort((a, b) => a.name.localeCompare(b.name));
+    renderCompaniesTable();
+    renderDashboard();
+  } catch (err) {
+    alert("Could not save company: " + err.message);
+  }
+}
+
+async function toggleCompanyField(companyId, field, value) {
+  const company = companiesRegistry.find((item) => item.id === companyId);
+  if (!company) return;
+
+  try {
+    const saved = await POST("/api/companies", { ...company, [field]: value });
+    Object.assign(company, saved);
+    renderDashboard();
+  } catch (err) {
+    alert("Update failed: " + err.message);
+    renderCompaniesTable();
+  }
+}
+
+async function deleteCompany(companyId) {
+  const company = companiesRegistry.find((item) => item.id === companyId);
+  if (!company) return;
+  if (!confirm(`Remove ${company.name} from registry?`)) return;
+
+  try {
+    await DELETE(`/api/companies/${companyId}`);
+    companiesRegistry = companiesRegistry.filter((item) => item.id !== companyId);
+    renderCompaniesTable();
+    renderDashboard();
+  } catch (err) {
+    alert("Delete failed: " + err.message);
+  }
+}
+
+async function loadCompaniesRegistry() {
+  const data = await GET("/api/companies");
+  companiesRegistry = data.companies ?? [];
+  discoveryMinConfidence = data.discovery_min_confidence ?? 85;
+  renderCompaniesTable();
+}
+
+// ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
 
@@ -941,17 +1562,30 @@ async function boot() {
 
   // Load data from server
   try {
-    [allJobs, profile] = await Promise.all([GET("/api/jobs"), GET("/api/profile")]);
+    const [jobs, prof, discover] = await Promise.all([
+      GET("/api/jobs"),
+      GET("/api/profile"),
+      GET("/api/discover"),
+    ]);
+    allJobs = jobs;
+    profile = prof;
+    discoverResult = discover.result ?? null;
+    discoverAnalyzedAt = discover.analyzed_at ?? null;
+    await migrateDiscoverFromLocalStorage();
+    await loadCompaniesRegistry();
   } catch (err) {
     console.warn("Could not load from server (server may not be running):", err.message);
     allJobs = [];
     profile = {};
+    discoverResult = null;
+    discoverAnalyzedAt = null;
   }
 
   // Render all tabs
   renderDashboard();
+  populateJobCompanyFilter();
   renderJobsTable();
-  renderDiscoverTab(state.discover);
+  renderDiscoverTab(discoverResult);
   if (state.worth) renderWorthResults(state.worth);
   renderTracker();
   loadProfileToForm(profile);
@@ -967,14 +1601,25 @@ async function boot() {
       if (v) { renderSkillTags([...skillTagsData, v]); qs("#skillInput").value = ""; }
     }
   });
-  qs("#btnExtractSkills").addEventListener("click", extractSkillsFromResume);
+  qs("#btnExtractSkills").addEventListener("click", parseResume);
   qs("#btnAddWork").addEventListener("click", promptAddWork);
 
   // Jobs tab
   qs("#btnSync").addEventListener("click", syncJobs);
-  ["#jobSearch","#jobSourceFilter","#jobSectorFilter","#jobSortSelect"].forEach((sel) => {
+  qs("#btnRank").addEventListener("click", rankAllJobs);
+  qs("#btnDeepScore").addEventListener("click", deepScoreTop50);
+  ["#jobSearch","#jobSourceFilter","#jobCompanyFilter","#jobSectorFilter","#jobLocationFilter","#jobRemoteFilter","#jobSortSelect"].forEach((sel) => {
     qs(sel).addEventListener("change", renderJobsTable);
-    if (sel === "#jobSearch") qs(sel).addEventListener("input", renderJobsTable);
+    if (sel === "#jobSearch" || sel === "#jobLocationFilter") qs(sel).addEventListener("input", renderJobsTable);
+  });
+
+  // Companies tab
+  qs("#btnDetectAts").addEventListener("click", detectCompanyAts);
+  qs("#discoverUrlInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") detectCompanyAts();
+  });
+  ["#companyAtsFilter", "#companyPreferredFilter"].forEach((sel) => {
+    qs(sel).addEventListener("change", renderCompaniesTable);
   });
 
   // Discover

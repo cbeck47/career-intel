@@ -4,7 +4,9 @@
     "usajobs": true,
     "greenhouse": true,
     "lever": true,
-    "ashby": true
+    "ashby": true,
+    "smartrecruiters": true,
+    "oracle_recruiting_cloud": true
   },
   "usajobs": {
     "keywords": ["Engineering Manager", "Technical Program Manager", "Platform Engineering", "DevOps Manager", "Director of Engineering"],
@@ -13,24 +15,22 @@
     "include_remote": true,
     "results_per_page": 50
   },
-  "greenhouse_companies": [
-    "stripe",
-    "airbnb",
-    "coinbase",
-    "brex",
-    "figma"
-  ],
-  "lever_companies": [
-    "netflix",
-    "reddit",
-    "robinhood",
-    "anduril"
-  ],
-  "ashby_companies": [
-    "anthropic",
-    "openai",
-    "linear",
-    "vercel",
-    "notion"
-  ]
+  "discovery": {
+    "auto_add_min_confidence": 85
+  },
+  "sync_filters": {
+    "enabled": false,
+    "location_keywords": ["mi", "remote", "detroit", "warren", "pontiac", "ann arbor"],
+    "title_keywords": ["software", "engineering", "manager", "platform", "program", "devops", "quality", "systems"]
+  },
+  "smartrecruiters": {
+    "detail_location_keywords": ["mi", "remote", "detroit", "warren", "pontiac", "ann arbor"],
+    "detail_title_keywords": ["software", "engineering", "manager", "platform", "program", "devops", "quality", "systems"]
+  },
+  "ranking": {
+    "top_n": 50,
+    "min_heuristic_score": 30,
+    "auto_rank_on_sync": false,
+    "auto_deep_score": false
+  }
 }

@@ -34,18 +34,7 @@ function normalizeJob(item) {
   };
 }
 
-async function fetchUSAJobs(config, apiKey, email) {
-  const cfg = config.usajobs ?? {};
-  const keywords = (cfg.keywords ?? []).join(";");
-  const params = new URLSearchParams({
-    Keyword: keywords,
-    LocationName: cfg.location ?? "",
-    Radius: cfg.radius_miles ?? 50,
-    RemoteIndicator: cfg.include_remote ? "True" : "False",
-    ResultsPerPage: cfg.results_per_page ?? 50,
-    Fields: "Min",
-  });
-
+async function searchOnce(params, apiKey, email) {
   const url = `${BASE}?${params.toString()}`;
   const res = await fetch(url, {
     headers: {
@@ -60,8 +49,47 @@ async function fetchUSAJobs(config, apiKey, email) {
   }
 
   const json = await res.json();
-  const items = json.SearchResult?.SearchResultItems ?? [];
-  return items.map(normalizeJob);
+  return json.SearchResult?.SearchResultItems ?? [];
+}
+
+async function fetchUSAJobs(config, apiKey, email) {
+  const cfg = config.usajobs ?? {};
+  const keywords = (cfg.keywords ?? []).filter(Boolean);
+  if (!keywords.length) keywords.push("");
+
+  const byId = new Map();
+
+  for (const keyword of keywords) {
+    const params = new URLSearchParams({
+      Keyword: keyword,
+      ResultsPerPage: String(cfg.results_per_page ?? 50),
+      Fields: "Min",
+    });
+
+    const hasLocation = Boolean(cfg.location?.trim());
+    if (hasLocation) {
+      params.set("LocationName", cfg.location.trim());
+      params.set("Radius", String(cfg.radius_miles ?? 50));
+    }
+
+    let items = await searchOnce(params, apiKey, email);
+
+    if (items.length === 0 && hasLocation) {
+      const fallback = new URLSearchParams({
+        Keyword: keyword,
+        ResultsPerPage: String(cfg.results_per_page ?? 50),
+        Fields: "Min",
+      });
+      items = await searchOnce(fallback, apiKey, email);
+    }
+
+    for (const item of items) {
+      const job = normalizeJob(item);
+      byId.set(job.id, job);
+    }
+  }
+
+  return [...byId.values()];
 }
 
 module.exports = { fetchUSAJobs };
