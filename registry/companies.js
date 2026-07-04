@@ -143,46 +143,89 @@ function formatOracleIdentifier(tenantHost, siteNumber) {
   return `${tenantHost}|${siteNumber}`;
 }
 
+function sourceKey(source) {
+  if (!source?.ats_type || !source?.ats_identifier) return null;
+  return `${source.ats_type}:${source.ats_identifier.toLowerCase()}`;
+}
+
+function companyPrimaryKey(company) {
+  return sourceKey(company) ?? sourceKey(company.sources?.[0]);
+}
+
 function mergeCompanies(existing, incoming) {
-  const byKey = new Map(
-    existing.map((c) => [`${c.ats_type}:${c.ats_identifier.toLowerCase()}`, c])
-  );
+  const byId = new Map(existing.map((c) => [c.id, c]));
+  const byKey = new Map();
+
+  for (const company of existing) {
+    const key = companyPrimaryKey(company);
+    if (key) byKey.set(key, company);
+    for (const source of company.sources ?? []) {
+      const sourceLookupKey = sourceKey(source);
+      if (sourceLookupKey) byKey.set(sourceLookupKey, company);
+    }
+  }
 
   for (const raw of incoming) {
     const company = normalizeCompany(raw);
-    if (!company.ats_type || !company.ats_identifier) continue;
+    const primaryKey = companyPrimaryKey(company);
 
-    const key = `${company.ats_type}:${company.ats_identifier.toLowerCase()}`;
-    const prev = byKey.get(key);
+    if (!primaryKey && !company.id) continue;
+
+    const prev =
+      (company.id ? byId.get(company.id) : null) ??
+      (primaryKey ? byKey.get(primaryKey) : null) ??
+      (company.sources?.[0] ? byKey.get(sourceKey(company.sources[0])) : null);
+
     if (prev) {
-      byKey.set(key, {
+      const merged = {
         ...prev,
         ...company,
         id: prev.id,
         added_at: prev.added_at,
-      });
+        sources: company.sources?.length ? company.sources : prev.sources,
+      };
+      byId.set(merged.id, merged);
+      const mergedKey = companyPrimaryKey(merged);
+      if (mergedKey) byKey.set(mergedKey, merged);
+      for (const source of merged.sources ?? []) {
+        const sourceLookupKey = sourceKey(source);
+        if (sourceLookupKey) byKey.set(sourceLookupKey, merged);
+      }
       continue;
     }
 
     if (company.careers_url) {
-      const urlMatch = [...byKey.values()].find(
+      const urlMatch = [...byId.values()].find(
         (c) => c.careers_url && c.careers_url === company.careers_url
       );
       if (urlMatch) {
-        byKey.set(`${urlMatch.ats_type}:${urlMatch.ats_identifier.toLowerCase()}`, {
+        const merged = {
           ...urlMatch,
           ...company,
           id: urlMatch.id,
           added_at: urlMatch.added_at,
-        });
+          sources: company.sources?.length ? company.sources : urlMatch.sources,
+        };
+        byId.set(merged.id, merged);
+        const mergedKey = companyPrimaryKey(merged);
+        if (mergedKey) byKey.set(mergedKey, merged);
+        for (const source of merged.sources ?? []) {
+          const sourceLookupKey = sourceKey(source);
+          if (sourceLookupKey) byKey.set(sourceLookupKey, merged);
+        }
         continue;
       }
     }
 
-    byKey.set(key, company);
+    byId.set(company.id, company);
+    if (primaryKey) byKey.set(primaryKey, company);
+    for (const source of company.sources ?? []) {
+      const sourceLookupKey = sourceKey(source);
+      if (sourceLookupKey) byKey.set(sourceLookupKey, company);
+    }
   }
 
-  return [...byKey.values()].sort((a, b) => a.name.localeCompare(b.name));
+  return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 module.exports = {

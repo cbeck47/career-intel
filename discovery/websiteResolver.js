@@ -93,10 +93,13 @@ async function resolveCareersCandidates(input = {}) {
   }
 
   if (!candidates.length && name) {
-    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "");
-    if (slug) {
-      candidates.push(`https://careers.smartrecruiters.com/${slug}`);
+    const stripped = name.toLowerCase().replace(/[^a-z0-9]+/g, "");
+    const hyphen = name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]+/g, "");
+    for (const slug of [...new Set([stripped, hyphen].filter(Boolean))]) {
+      candidates.push(`https://boards.greenhouse.io/${slug}`);
       candidates.push(`https://jobs.lever.co/${slug}`);
+      candidates.push(`https://jobs.ashbyhq.com/${slug}`);
+      candidates.push(`https://careers.smartrecruiters.com/${slug}`);
     }
   }
 

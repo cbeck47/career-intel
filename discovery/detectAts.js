@@ -1,6 +1,7 @@
 const fetch = require("node-fetch");
 const { isSupportedAts } = require("../adapters/index");
 const { formatOracleIdentifier, parseOracleIdentifier } = require("../registry/companies");
+const { parseWorkdayIdentifier } = require("../fetchers/workday");
 
 const USER_AGENT = "CareerIntel/1.0 (ATS discovery)";
 
@@ -87,7 +88,10 @@ function detectFromUrl(url) {
   }
 
   if (host.endsWith(".myworkdayjobs.com") || host === "myworkdayjobs.com") {
-    return { ats_type: "workday", ats_identifier: segment, directHostMatch: true };
+    const tenant = host.replace(/\.myworkdayjobs\.com$/i, "").toLowerCase();
+    const identifier =
+      tenant && tenant !== "myworkdayjobs" && segment ? `${tenant}|${segment}` : segment;
+    return { ats_type: "workday", ats_identifier: identifier, directHostMatch: true };
   }
 
   if (host.includes("icims.com")) {
@@ -283,6 +287,41 @@ async function probeAtsApi(atsType, identifier) {
         { headers: { "User-Agent": USER_AGENT } }
       );
       return res.ok;
+    }
+    if (atsType === "workday") {
+      const parsed = parseWorkdayIdentifier(identifier);
+      if (!parsed) return false;
+      const { tenant, jobboard } = parsed;
+      const res = await fetch(
+        `https://${tenant}.myworkdayjobs.com/wday/cxs/${tenant}/${jobboard}/jobs`,
+        {
+          method: "POST",
+          headers: {
+            "User-Agent": USER_AGENT,
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            appliedFacets: {},
+            limit: 1,
+            offset: 0,
+            searchText: "",
+          }),
+        }
+      );
+      if (!res.ok) return false;
+      const json = await res.json();
+      return (json.jobPostings ?? json.jobs ?? []).length > 0;
+    }
+    if (atsType === "icims") {
+      const res = await fetch(
+        `https://careers-${encodeURIComponent(identifier)}.icims.com/jobs/search?ss=1&searchRelation=keyword_all&output=json`,
+        { headers: { "User-Agent": USER_AGENT, Accept: "application/json" } }
+      );
+      if (!res.ok) return false;
+      const json = await res.json();
+      const jobs = Array.isArray(json) ? json : json?.jobs ?? json?.results ?? [];
+      return jobs.length > 0;
     }
   } catch {
     return false;

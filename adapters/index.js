@@ -3,6 +3,8 @@ const { fetchLever } = require("../fetchers/lever");
 const { fetchAshby } = require("../fetchers/ashby");
 const { fetchSmartRecruiters } = require("../fetchers/smartrecruiters");
 const { fetchOracleRecruiting } = require("../fetchers/oracleRecruiting");
+const { fetchWorkday } = require("../fetchers/workday");
+const { fetchIcims } = require("../fetchers/icims");
 
 const SUPPORTED_ATS = new Set([
   "greenhouse",
@@ -10,6 +12,8 @@ const SUPPORTED_ATS = new Set([
   "ashby",
   "smartrecruiters",
   "oracle_recruiting_cloud",
+  "workday",
+  "icims",
 ]);
 
 function applyDisplayName(jobs, displayName) {
@@ -57,6 +61,18 @@ const ADAPTERS = {
   oracle_recruiting_cloud: {
     async fetch(identifier, opts = {}) {
       const jobs = await fetchOracleRecruiting(identifier, buildAdapterOptions(opts));
+      return applyDisplayName(jobs, opts.displayName);
+    },
+  },
+  workday: {
+    async fetch(identifier, opts = {}) {
+      const jobs = await fetchWorkday(identifier, buildAdapterOptions(opts));
+      return applyDisplayName(jobs, opts.displayName);
+    },
+  },
+  icims: {
+    async fetch(identifier, opts = {}) {
+      const jobs = await fetchIcims(identifier, buildAdapterOptions(opts));
       return applyDisplayName(jobs, opts.displayName);
     },
   },

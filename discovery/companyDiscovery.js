@@ -144,7 +144,12 @@ async function discoverCompany(input = {}, options = {}) {
   let aiUsed = false;
   const evidence = buildEvidencePacket(input, uniqueCandidates, detections);
 
-  if (confidence >= 60 && confidence < 85 && aiJson && process.env.OPENAI_API_KEY) {
+  const evidenceHasSignals =
+    evidence.candidate_careers_links.length > 0 ||
+    evidence.ats_urls.length > 0 ||
+    evidence.final_url != null;
+
+  if (confidence < 85 && evidenceHasSignals && aiJson && process.env.OPENAI_API_KEY) {
     const aiResult = await interpretEvidence(evidence, aiJson);
     aiUsed = aiResult.used;
 

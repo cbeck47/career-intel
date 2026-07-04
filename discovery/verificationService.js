@@ -2,20 +2,6 @@ const { detectAts } = require("./detectAts");
 const { normalizeJobSource, nowIso } = require("../registry/companies");
 const { isSupportedAts } = require("../adapters/index");
 
-function sourcesMatch(existingSources, detected) {
-  if (!existingSources?.length) {
-    return (
-      existingSources?.ats_type === detected.ats_type &&
-      existingSources?.ats_identifier?.toLowerCase() === detected.ats_identifier?.toLowerCase()
-    );
-  }
-  return existingSources.some(
-    (source) =>
-      source.ats_type === detected.ats_type &&
-      source.ats_identifier?.toLowerCase() === detected.ats_identifier?.toLowerCase()
-  );
-}
-
 async function verifyCompany(company) {
   const careersUrl = company.careers_url ?? company.sources?.[0]?.careers_url;
   if (!careersUrl) {
