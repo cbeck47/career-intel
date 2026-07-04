@@ -27,6 +27,11 @@
     "detail_location_keywords": ["mi", "remote", "detroit", "warren", "pontiac", "ann arbor"],
     "detail_title_keywords": ["software", "engineering", "manager", "platform", "program", "devops", "quality", "systems"]
   },
+  "verification": {
+    "auto_verify": false,
+    "max_age_days": 30,
+    "batch_limit": 10
+  },
   "ranking": {
     "top_n": 50,
     "min_heuristic_score": 30,

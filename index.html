@@ -15,6 +15,7 @@
       <button class="tabBtn active" data-tab="dashboard">Dashboard</button>
       <button class="tabBtn" data-tab="jobs">Jobs</button>
       <button class="tabBtn" data-tab="companies">Companies</button>
+      <button class="tabBtn" data-tab="packs">Packs</button>
       <button class="tabBtn" data-tab="discover">Discover</button>
       <button class="tabBtn" data-tab="worth">My Worth</button>
       <button class="tabBtn" data-tab="tailor">Tailor Resume</button>
@@ -131,6 +132,24 @@
         <div id="discoverResultCard" class="hidden" style="margin-top:16px;padding:12px;border:1px solid var(--border);border-radius:8px;background:var(--surface2)"></div>
       </div>
 
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-header">
+          <span class="card-title">Batch Discover</span>
+          <button class="btn btn-primary btn-sm" id="btnBatchDiscover">Discover All</button>
+        </div>
+        <p style="font-size:13px;color:var(--muted);margin:0 0 12px">Paste company names, websites, or careers URLs — one per line.</p>
+        <textarea id="batchDiscoverInput" rows="5" placeholder="Ford Motor Company&#10;https://www.bosch.com&#10;https://careers.smartrecruiters.com/BoschGroup"></textarea>
+        <div id="batchDiscoverResults" class="hidden" style="margin-top:12px"></div>
+      </div>
+
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-header">
+          <span class="card-title">Verification Queue</span>
+          <button class="btn btn-secondary btn-sm" id="btnVerifyStale">Verify Stale</button>
+        </div>
+        <div id="verificationQueueList" style="font-size:13px;color:var(--muted)">Loading…</div>
+      </div>
+
       <div class="toolbar">
         <select id="companyAtsFilter">
           <option value="">All ATS types</option>
@@ -158,6 +177,7 @@
                 <th>Identifier</th>
                 <th>Preferred</th>
                 <th>Enabled</th>
+                <th>Verification</th>
                 <th>Confidence</th>
                 <th>Last Verified</th>
                 <th></th>
@@ -169,6 +189,36 @@
         <div id="companiesEmpty" class="empty-state hidden">
           <strong>No companies in registry</strong>
           <p>Use ATS Discovery above or migrate from your old config on first load.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ====================================================
+         PACKS
+    ===================================================== -->
+    <div id="tab-packs" class="tabPanel">
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-header">
+          <span class="card-title">Build Pack</span>
+          <button class="btn btn-primary btn-sm" id="btnBuildPack">Build Pack</button>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+          <input type="text" id="packBuildName" placeholder="Pack name (e.g. southeast-mi)" />
+          <input type="text" id="packBuildRegion" placeholder="Region (optional)" />
+        </div>
+        <input type="text" id="packBuildDescription" placeholder="Description (optional)" style="width:100%;margin-bottom:12px" />
+        <textarea id="packBuildInput" rows="5" placeholder="Company names or URLs, one per line"></textarea>
+      </div>
+
+      <div class="card" style="padding:0">
+        <div class="card-header" style="padding:12px 16px">
+          <span class="card-title">Available Packs</span>
+          <span id="packCount" style="font-size:12px;color:var(--muted)"></span>
+        </div>
+        <div id="packsList" style="padding:0 16px 16px"></div>
+        <div id="packsEmpty" class="empty-state hidden">
+          <strong>No packs yet</strong>
+          <p>Build a pack above or add JSON files to the packs/ folder.</p>
         </div>
       </div>
     </div>

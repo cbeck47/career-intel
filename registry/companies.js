@@ -21,8 +21,27 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function normalizeJobSource(input) {
+  const ts = nowIso();
+  return {
+    ats_type: input.ats_type,
+    ats_identifier: (input.ats_identifier ?? "").trim(),
+    careers_url: (input.careers_url ?? "").trim() || null,
+    application_url: (input.application_url ?? "").trim() || null,
+    platform: input.platform?.trim() || null,
+    confidence: input.confidence ?? null,
+    probe_ok: input.probe_ok === true,
+    last_verified: input.last_verified ?? ts,
+    enabled: input.enabled !== false,
+    notes: input.notes?.trim() || "",
+  };
+}
+
 function normalizeCompany(input) {
   const ts = nowIso();
+  const sources = Array.isArray(input.sources)
+    ? input.sources.map(normalizeJobSource)
+    : [];
   return {
     id: input.id ?? newCompanyId(),
     name: (input.name ?? "").trim() || slugToName(input.ats_identifier ?? ""),
@@ -37,10 +56,34 @@ function normalizeCompany(input) {
     application_url: (input.application_url ?? "").trim() || null,
     platform: input.platform?.trim() || null,
     discovery_confidence: input.discovery_confidence ?? null,
+    verification_status: input.verification_status ?? null,
     last_verified: input.last_verified ?? null,
     added_at: input.added_at ?? ts,
     notes: input.notes?.trim() || "",
+    sources,
   };
+}
+
+function getEffectiveJobSources(company) {
+  const enabledSources = (company.sources ?? []).filter((source) => source.enabled !== false);
+  if (enabledSources.length > 0) return enabledSources;
+  if (company.ats_type && company.ats_identifier) {
+    return [
+      {
+        ats_type: company.ats_type,
+        ats_identifier: company.ats_identifier,
+        careers_url: company.careers_url ?? null,
+        application_url: company.application_url ?? null,
+        platform: company.platform ?? null,
+        enabled: true,
+      },
+    ];
+  }
+  return [];
+}
+
+function companyHasSyncSources(company) {
+  return company.enabled && getEffectiveJobSources(company).length > 0;
 }
 
 function buildMigrationEntry(atsType, slug) {
@@ -144,10 +187,14 @@ function mergeCompanies(existing, incoming) {
 
 module.exports = {
   normalizeCompany,
+  normalizeJobSource,
+  getEffectiveJobSources,
+  companyHasSyncSources,
   migrateFromConfig,
   mergeCompanies,
   parseOracleIdentifier,
   formatOracleIdentifier,
   slugToName,
   newCompanyId,
+  nowIso,
 };

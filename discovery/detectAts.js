@@ -300,6 +300,9 @@ function computeConfidence({
   companyName,
   redirectCount,
   signalCount,
+  aiVerified,
+  aiFailed,
+  adjustment = 0,
 }) {
   if (!ats_type) return 0;
 
@@ -314,6 +317,7 @@ function computeConfidence({
   }
 
   if (probeOk) score += 30;
+  else if (probeOk === false) score -= 25;
 
   if (pageTitle && companyName) {
     const title = pageTitle.toLowerCase();
@@ -321,8 +325,13 @@ function computeConfidence({
     if (title.includes(name.split(" ")[0])) score += 10;
   }
 
+  if (aiVerified) score += 15;
+  if (aiFailed) score -= 20;
+
   if (redirectCount > 2) score -= 10;
   if (signalCount > 3) score -= 15;
+
+  score += adjustment;
 
   return Math.max(0, Math.min(100, score));
 }
@@ -433,4 +442,4 @@ async function detectAts(rawUrl) {
   };
 }
 
-module.exports = { detectAts };
+module.exports = { detectAts, probeAtsApi, computeConfidence };

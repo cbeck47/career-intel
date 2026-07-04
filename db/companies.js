@@ -47,4 +47,41 @@ function count() {
   return db.prepare("SELECT COUNT(*) AS count FROM companies").get().count;
 }
 
-module.exports = { getAll, upsertMany, saveRegistry, deleteById, count };
+function getStale(olderThanDays = 30) {
+  const { companies } = getAll();
+  const cutoff = new Date(Date.now() - olderThanDays * 86400000).toISOString();
+  return companies.filter(
+    (company) =>
+      company.enabled &&
+      (!company.last_verified || company.last_verified < cutoff)
+  );
+}
+
+function getById(id) {
+  const { companies } = getAll();
+  return companies.find((company) => company.id === id) ?? null;
+}
+
+function updateCompany(company) {
+  upsertMany([company]);
+  return company;
+}
+
+function getReviewQueue() {
+  const { companies } = getAll();
+  return companies.filter((company) =>
+    ["manual_review", "stale", "unresolved"].includes(company.verification_status)
+  );
+}
+
+module.exports = {
+  getAll,
+  upsertMany,
+  saveRegistry,
+  deleteById,
+  count,
+  getStale,
+  getById,
+  updateCompany,
+  getReviewQueue,
+};

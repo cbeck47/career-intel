@@ -1,0 +1,40 @@
+{
+  "name": "southeast-mi",
+  "description": "Southeast Michigan employers",
+  "region": "Southeast Michigan",
+  "industry": null,
+  "created_at": "2026-07-03T00:00:00.000Z",
+  "updated_at": "2026-07-03T00:00:00.000Z",
+  "companies": [
+    {
+      "name": "Ford Motor Company",
+      "website": "https://www.ford.com/",
+      "headquarters": "Dearborn, MI",
+      "preferred": true,
+      "enabled": true,
+      "ats_type": "oracle_recruiting_cloud",
+      "ats_identifier": "efds.fa.em5.oraclecloud.com|CX_1",
+      "careers_url": "https://www.careers.ford.com/",
+      "application_url": "https://apply.ford.com/",
+      "platform": "Oracle Fusion HCM",
+      "discovery_confidence": 100,
+      "verification_status": "verified",
+      "last_verified": "2026-07-03T00:00:00.000Z",
+      "notes": "Starter pack entry",
+      "sources": [
+        {
+          "ats_type": "oracle_recruiting_cloud",
+          "ats_identifier": "efds.fa.em5.oraclecloud.com|CX_1",
+          "careers_url": "https://www.careers.ford.com/",
+          "application_url": "https://apply.ford.com/",
+          "platform": "Oracle Fusion HCM",
+          "confidence": 100,
+          "probe_ok": true,
+          "last_verified": "2026-07-03T00:00:00.000Z",
+          "enabled": true,
+          "notes": ""
+        }
+      ]
+    }
+  ]
+}

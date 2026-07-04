@@ -12,10 +12,15 @@ const { rankJobs } = require("./ranking/heuristic");
 const { scoreJobWithAI } = require("./ai/matchJob");
 const { matchJobSchema } = require("./ai/schemas");
 const { detectAts } = require("./discovery/detectAts");
+const { discoverCompany, discoverCompanies } = require("./discovery/companyDiscovery");
+const { verifyCompany, verifyStale } = require("./discovery/verificationService");
+const packs = require("./discovery/packs");
 const {
   normalizeCompany,
   migrateFromConfig,
   mergeCompanies,
+  getEffectiveJobSources,
+  companyHasSyncSources,
 } = require("./registry/companies");
 const db = require("./db");
 
@@ -97,43 +102,47 @@ async function syncJobs() {
   const registry = loadCompaniesRegistry();
   const srCfg = config.smartrecruiters ?? {};
   const syncFilters = config.sync_filters ?? {};
-  const enabledCompanies = registry.companies.filter(
-    (company) => company.enabled && company.ats_identifier && company.ats_type
-  );
+  const enabledCompanies = registry.companies.filter((company) => companyHasSyncSources(company));
 
   for (const company of enabledCompanies) {
-    if (sources[company.ats_type] === false) continue;
+    const jobSources = getEffectiveJobSources(company);
 
-    const adapter = getAdapter(company.ats_type);
-    if (!adapter) {
-      if (!isSupportedAts(company.ats_type)) {
-        console.warn(
-          `[sync] No fetch adapter for ${company.name} (${company.ats_type}) — discovery only`
-        );
+    for (const source of jobSources) {
+      if (sources[source.ats_type] === false) continue;
+
+      const adapter = getAdapter(source.ats_type);
+      if (!adapter) {
+        if (!isSupportedAts(source.ats_type)) {
+          console.warn(
+            `[sync] No fetch adapter for ${company.name} (${source.ats_type}) — discovery only`
+          );
+        }
+        continue;
       }
-      continue;
-    }
 
-    try {
-      const adapterOpts = {
-        displayName: company.name,
-        syncFilters,
-        smartrecruitersConfig: srCfg,
-        detailLocationKeywords: srCfg.detail_location_keywords,
-        detailTitleKeywords: srCfg.detail_title_keywords,
-        applicationUrl: company.application_url ?? null,
-      };
-      const jobs = await adapter.fetch(company.ats_identifier, adapterOpts);
-      allJobs.push(
-        ...jobs.map((job) => ({
-          ...job,
-          company: company.name,
-          registry_id: company.id,
-        }))
-      );
-      console.log(`[sync] ${company.name} (${company.ats_type}): ${jobs.length} jobs`);
-    } catch (err) {
-      console.error(`[sync] ${company.name} error:`, err.message);
+      try {
+        const adapterOpts = {
+          displayName: company.name,
+          syncFilters,
+          smartrecruitersConfig: srCfg,
+          detailLocationKeywords: srCfg.detail_location_keywords,
+          detailTitleKeywords: srCfg.detail_title_keywords,
+          applicationUrl: source.application_url ?? company.application_url ?? null,
+        };
+        const jobs = await adapter.fetch(source.ats_identifier, adapterOpts);
+        allJobs.push(
+          ...jobs.map((job) => ({
+            ...job,
+            company: company.name,
+            registry_id: company.id,
+          }))
+        );
+        console.log(
+          `[sync] ${company.name} (${source.ats_type}): ${jobs.length} jobs`
+        );
+      } catch (err) {
+        console.error(`[sync] ${company.name} (${source.ats_type}) error:`, err.message);
+      }
     }
   }
 
@@ -292,8 +301,16 @@ app.post("/api/companies", (req, res) => {
   const registry = loadCompaniesRegistry();
   const company = normalizeCompany(req.body ?? {});
 
-  if (!company.ats_type || !company.ats_identifier) {
+  if ((!company.ats_type || !company.ats_identifier) && !company.sources?.length) {
     return res.status(400).json({ error: "ats_type and ats_identifier are required" });
+  }
+
+  if ((!company.ats_type || !company.ats_identifier) && company.sources?.length) {
+    company.ats_type = company.sources[0].ats_type;
+    company.ats_identifier = company.sources[0].ats_identifier;
+    company.careers_url = company.careers_url ?? company.sources[0].careers_url;
+    company.application_url = company.application_url ?? company.sources[0].application_url;
+    company.platform = company.platform ?? company.sources[0].platform;
   }
 
   let idx = registry.companies.findIndex((item) => item.id === company.id);
@@ -361,6 +378,139 @@ app.post("/api/companies/import", (req, res) => {
   registry.companies = mergeCompanies(registry.companies, incoming);
   db.companies.saveRegistry(registry);
   res.json({ imported: incoming.length, total: registry.companies.length, companies: registry.companies });
+});
+
+app.get("/api/companies/stale", (req, res) => {
+  const maxAgeDays = Number(req.query.max_age_days ?? 30);
+  const stale = db.companies.getStale(maxAgeDays);
+  res.json({ count: stale.length, companies: stale });
+});
+
+app.get("/api/companies/review-queue", (req, res) => {
+  const queue = db.companies.getReviewQueue();
+  res.json({ count: queue.length, companies: queue });
+});
+
+app.post("/api/companies/discover-batch", async (req, res) => {
+  const inputs = req.body?.inputs ?? req.body?.companies ?? req.body;
+  if (!Array.isArray(inputs)) {
+    return res.status(400).json({ error: "Expected { inputs: [...] }" });
+  }
+
+  try {
+    const results = await discoverCompanies(inputs, { aiJson });
+    res.json({ count: results.length, results });
+  } catch (err) {
+    console.error("[/api/companies/discover-batch]", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/companies/verify/:id", async (req, res) => {
+  const company = db.companies.getById(req.params.id);
+  if (!company) return res.status(404).json({ error: "Company not found" });
+
+  try {
+    const result = await verifyCompany(company);
+    db.companies.updateCompany(result.company);
+    res.json(result);
+  } catch (err) {
+    console.error("[/api/companies/verify/:id]", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/companies/verify-stale", async (req, res) => {
+  const maxAgeDays = Number(req.body?.max_age_days ?? req.query?.max_age_days ?? 30);
+  const limit = Number(req.body?.limit ?? req.query?.limit ?? 10);
+
+  try {
+    const results = await verifyStale({ maxAgeDays, limit });
+    res.json({
+      verified: results.length,
+      changed: results.filter((item) => item.changed).length,
+      results,
+    });
+  } catch (err) {
+    console.error("[/api/companies/verify-stale]", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/packs", (req, res) => {
+  res.json({ packs: packs.listPacks() });
+});
+
+app.get("/api/packs/:name", (req, res) => {
+  try {
+    res.json(packs.readPack(req.params.name));
+  } catch (err) {
+    res.status(404).json({ error: err.message });
+  }
+});
+
+app.post("/api/packs/:name", (req, res) => {
+  try {
+    const saved = packs.writePack(req.params.name, req.body ?? {});
+    res.json(saved);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/packs/:name/import", (req, res) => {
+  try {
+    const registry = loadCompaniesRegistry();
+    const { pack, companies, imported } = packs.importPackToRegistry(
+      req.params.name,
+      registry.companies
+    );
+    db.companies.saveRegistry({ companies });
+    res.json({ imported, total: companies.length, pack: pack.name, companies });
+  } catch (err) {
+    res.status(404).json({ error: err.message });
+  }
+});
+
+app.get("/api/packs/:name/export", (req, res) => {
+  try {
+    const pack = packs.readPack(req.params.name);
+    res.setHeader("Content-Type", "application/json");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${pack.name}.json"`
+    );
+    res.send(JSON.stringify(pack, null, 2));
+  } catch (err) {
+    res.status(404).json({ error: err.message });
+  }
+});
+
+app.post("/api/packs/build", async (req, res) => {
+  const { name, description, region, industry, inputs } = req.body ?? {};
+  if (!name?.trim()) {
+    return res.status(400).json({ error: "name is required" });
+  }
+  if (!Array.isArray(inputs) || !inputs.length) {
+    return res.status(400).json({ error: "inputs array is required" });
+  }
+
+  try {
+    const discoveries = await discoverCompanies(inputs, { aiJson });
+    const companies = discoveries
+      .filter((item) => item.registry_entry)
+      .map((item) => item.registry_entry);
+    const pack = packs.buildPack(name, {
+      description,
+      region,
+      industry,
+      companies,
+    });
+    res.json({ pack, discoveries });
+  } catch (err) {
+    console.error("[/api/packs/build]", err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ---------------------------------------------------------------------------

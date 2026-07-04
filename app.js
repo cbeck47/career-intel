@@ -142,6 +142,8 @@ function activateTab(tabId) {
   if (tabId === "discover" && discoverResult) {
     requestAnimationFrame(() => drawCareerNetwork(discoverResult.adjacent_roles ?? []));
   }
+  if (tabId === "packs") loadPacksList();
+  if (tabId === "companies") loadVerificationQueue();
 }
 
 // ---------------------------------------------------------------------------
@@ -1391,6 +1393,14 @@ function confidenceClass(score) {
   return "score-low";
 }
 
+function verificationBadge(status, lastVerified) {
+  const label = status ?? "unknown";
+  const tip = lastVerified
+    ? `Last verified: ${new Date(lastVerified).toLocaleString()}`
+    : "Not verified yet";
+  return `<span class="verify-badge verify-${escHtml(label)}" title="${escHtml(tip)}">${escHtml(label.replace("_", " "))}</span>`;
+}
+
 function renderCompaniesTable() {
   const companies = filteredCompanies();
   const tbody = qs("#companiesTableBody");
@@ -1408,19 +1418,25 @@ function renderCompaniesTable() {
       ? new Date(company.last_verified).toLocaleDateString()
       : "—";
     const confidence = company.discovery_confidence;
+    const sourceCount = company.sources?.length ?? 0;
     return `<tr data-id="${escHtml(company.id)}">
       <td>
         <div>${escHtml(company.name)}</div>
         ${company.application_url ? `<div style="font-size:11px;color:var(--muted)">${escHtml(company.application_url)}</div>` : ""}
         ${company.platform ? `<div style="font-size:11px;color:var(--muted)">${escHtml(company.platform)}</div>` : ""}
+        ${sourceCount > 1 ? `<div style="font-size:11px;color:var(--accent)">${sourceCount} job sources</div>` : ""}
       </td>
       <td>${sourceBadge(company.ats_type)}</td>
       <td><code style="font-size:11px">${escHtml(company.ats_identifier)}</code></td>
       <td><input type="checkbox" class="company-preferred" data-id="${escHtml(company.id)}" ${company.preferred ? "checked" : ""} /></td>
       <td><input type="checkbox" class="company-enabled" data-id="${escHtml(company.id)}" ${company.enabled ? "checked" : ""} /></td>
+      <td>${verificationBadge(company.verification_status, company.last_verified)}</td>
       <td>${confidence != null ? `<span class="score-pill ${confidenceClass(confidence)}">${confidence}%</span>` : "—"}</td>
       <td style="font-size:12px;color:var(--muted)">${escHtml(verified)}</td>
-      <td><button class="btn btn-secondary btn-sm company-delete" data-id="${escHtml(company.id)}">Delete</button></td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-secondary btn-sm company-verify" data-id="${escHtml(company.id)}" title="Re-verify">&#8635;</button>
+        <button class="btn btn-secondary btn-sm company-delete" data-id="${escHtml(company.id)}">Delete</button>
+      </td>
     </tr>`;
   }).join("");
 
@@ -1432,6 +1448,9 @@ function renderCompaniesTable() {
   });
   qsa(".company-delete", tbody).forEach((el) => {
     el.addEventListener("click", () => deleteCompany(el.dataset.id));
+  });
+  qsa(".company-verify", tbody).forEach((el) => {
+    el.addEventListener("click", () => verifySingleCompany(el.dataset.id, el));
   });
 }
 
@@ -1502,18 +1521,22 @@ async function detectCompanyAts() {
 }
 
 async function saveDiscoveredCompany(result) {
+  const entry = result.registry_entry ?? result;
   const company = {
-    name: result.name,
-    ats_type: result.ats_type,
-    ats_identifier: result.ats_identifier,
-    careers_url: result.careers_url,
-    application_url: result.application_url ?? null,
-    platform: result.platform ?? null,
-    discovery_confidence: result.confidence,
-    last_verified: new Date().toISOString(),
-    preferred: true,
-    enabled: result.supported !== false,
-    notes: result.supported ? "" : "ATS detected but fetch adapter not available yet",
+    name: entry.name ?? result.name ?? result.company_name,
+    website: entry.website ?? result.website ?? null,
+    ats_type: entry.ats_type ?? result.ats_type,
+    ats_identifier: entry.ats_identifier ?? result.ats_identifier,
+    careers_url: entry.careers_url ?? result.careers_url,
+    application_url: entry.application_url ?? result.application_url ?? null,
+    platform: entry.platform ?? result.platform ?? null,
+    discovery_confidence: entry.discovery_confidence ?? result.confidence,
+    verification_status: entry.verification_status ?? (result.confidence >= 85 ? "verified" : "manual_review"),
+    last_verified: entry.last_verified ?? new Date().toISOString(),
+    preferred: entry.preferred ?? true,
+    enabled: entry.enabled ?? result.supported !== false,
+    sources: entry.sources ?? result.sources ?? [],
+    notes: entry.notes ?? (result.supported ? "" : "ATS detected but fetch adapter not available yet"),
   };
 
   try {
@@ -1563,6 +1586,248 @@ async function loadCompaniesRegistry() {
   companiesRegistry = data.companies ?? [];
   discoveryMinConfidence = data.discovery_min_confidence ?? 85;
   renderCompaniesTable();
+  loadVerificationQueue();
+}
+
+function parseBatchDiscoverLines(text) {
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      if (/^https?:\/\//i.test(line)) {
+        if (/career|jobs|work-with-us|apply|lever|greenhouse|smartrecruiters|ashby|oraclecloud/i.test(line)) {
+          return { careers_url: line };
+        }
+        return { website: line };
+      }
+      return { name: line };
+    });
+}
+
+function renderBatchDiscoverResults(results) {
+  const container = qs("#batchDiscoverResults");
+  if (!results?.length) {
+    container.innerHTML = "<p style='color:var(--muted)'>No results.</p>";
+    setHidden(container, false);
+    return;
+  }
+
+  const resolvedCount = results.filter((item) => item.status === "resolved").length;
+  container.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
+      <span style="font-size:13px;color:var(--muted)">${results.length} discovered · ${resolvedCount} resolved</span>
+      <button class="btn btn-primary btn-sm" id="btnAddAllResolved">Add all resolved</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Input</th><th>Company</th><th>ATS</th><th>Status</th><th>Confidence</th><th></th></tr></thead>
+        <tbody>
+          ${results.map((item, idx) => `<tr>
+            <td style="font-size:12px">${escHtml(item.input)}</td>
+            <td>${escHtml(item.company_name ?? "—")}</td>
+            <td>${item.sources?.[0] ? `${sourceBadge(item.sources[0].ats_type)} <code style="font-size:11px">${escHtml(item.sources[0].ats_identifier)}</code>` : "—"}</td>
+            <td>${escHtml(item.status)}</td>
+            <td>${item.confidence != null ? `<span class="score-pill ${confidenceClass(item.confidence)}">${item.confidence}%</span>` : "—"}</td>
+            <td><button class="btn btn-secondary btn-sm batch-add-company" data-idx="${idx}" ${item.registry_entry ? "" : "disabled"}>Add</button></td>
+          </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+  setHidden(container, false);
+
+  qs("#btnAddAllResolved")?.addEventListener("click", async () => {
+    for (const item of results.filter((row) => row.status === "resolved" && row.registry_entry)) {
+      await saveDiscoveredCompany(item);
+    }
+  });
+  qsa(".batch-add-company", container).forEach((btn) => {
+    btn.addEventListener("click", () => saveDiscoveredCompany(results[Number(btn.dataset.idx)]));
+  });
+}
+
+async function runBatchDiscover() {
+  const text = qs("#batchDiscoverInput").value.trim();
+  if (!text) return;
+
+  const btn = qs("#btnBatchDiscover");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Discovering…';
+  try {
+    const inputs = parseBatchDiscoverLines(text);
+    const res = await POST("/api/companies/discover-batch", { inputs });
+    renderBatchDiscoverResults(res.results ?? []);
+  } catch (err) {
+    alert("Batch discover failed: " + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = "Discover All";
+  }
+}
+
+async function loadVerificationQueue() {
+  const el = qs("#verificationQueueList");
+  if (!el) return;
+  try {
+    const data = await GET("/api/companies/review-queue");
+    const queue = data.companies ?? [];
+    if (!queue.length) {
+      el.innerHTML = "<p style='margin:0'>No companies need review.</p>";
+      return;
+    }
+    el.innerHTML = queue.map((company) => `
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">
+        <div>
+          <strong>${escHtml(company.name)}</strong>
+          ${verificationBadge(company.verification_status, company.last_verified)}
+          <div style="font-size:11px;color:var(--muted)">${escHtml(company.ats_type)} · ${escHtml(company.ats_identifier ?? "—")}</div>
+        </div>
+        <button class="btn btn-secondary btn-sm queue-verify" data-id="${escHtml(company.id)}">Verify</button>
+      </div>
+    `).join("");
+    qsa(".queue-verify", el).forEach((btn) => {
+      btn.addEventListener("click", () => verifySingleCompany(btn.dataset.id, btn));
+    });
+  } catch {
+    el.innerHTML = "<p style='margin:0'>Could not load verification queue.</p>";
+  }
+}
+
+async function verifySingleCompany(companyId, btn) {
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>';
+  }
+  try {
+    await POST(`/api/companies/verify/${companyId}`);
+    await loadCompaniesRegistry();
+  } catch (err) {
+    alert("Verify failed: " + err.message);
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = "Verify";
+    }
+  }
+}
+
+async function verifyStaleCompanies() {
+  const btn = qs("#btnVerifyStale");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Verifying…';
+  try {
+    const res = await POST("/api/companies/verify-stale", { max_age_days: 30, limit: 10 });
+    await loadCompaniesRegistry();
+    alert(`Verified ${res.verified} companies (${res.changed} changed).`);
+  } catch (err) {
+    alert("Verify stale failed: " + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = "Verify Stale";
+  }
+}
+
+let packsCache = [];
+
+async function loadPacksList() {
+  const listEl = qs("#packsList");
+  const countEl = qs("#packCount");
+  if (!listEl) return;
+
+  try {
+    const data = await GET("/api/packs");
+    packsCache = data.packs ?? [];
+    if (countEl) countEl.textContent = `${packsCache.length} packs`;
+    setHidden(qs("#packsEmpty"), packsCache.length > 0);
+
+    if (!packsCache.length) {
+      listEl.innerHTML = "";
+      return;
+    }
+
+    const cards = await Promise.all(
+      packsCache.map(async (name) => {
+        const pack = await GET(`/api/packs/${encodeURIComponent(name)}`);
+        return { name, pack };
+      })
+    );
+
+    listEl.innerHTML = cards.map(({ name, pack }) => `
+      <div class="pack-card">
+        <div class="pack-card-header">
+          <div>
+            <div style="font-weight:600">${escHtml(pack.name)}</div>
+            <div style="font-size:12px;color:var(--muted)">${escHtml(pack.description || "No description")}</div>
+            <div style="font-size:11px;color:var(--muted)">${escHtml(pack.region ?? "")} · ${pack.companies?.length ?? 0} companies</div>
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <button class="btn btn-primary btn-sm pack-import" data-name="${escHtml(name)}">Import All</button>
+            <a class="btn btn-secondary btn-sm" href="/api/packs/${encodeURIComponent(name)}/export" download="${escHtml(name)}.json">Export</a>
+          </div>
+        </div>
+        <div style="margin-top:10px;font-size:12px;color:var(--muted)">
+          ${(pack.companies ?? []).slice(0, 5).map((c) => escHtml(c.name)).join(", ")}${(pack.companies?.length ?? 0) > 5 ? "…" : ""}
+        </div>
+      </div>
+    `).join("");
+
+    qsa(".pack-import", listEl).forEach((btn) => {
+      btn.addEventListener("click", () => importPack(btn.dataset.name, btn));
+    });
+  } catch (err) {
+    listEl.innerHTML = `<p style="color:var(--red)">${escHtml(err.message)}</p>`;
+  }
+}
+
+async function importPack(name, btn) {
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>';
+  }
+  try {
+    const res = await POST(`/api/packs/${encodeURIComponent(name)}/import`);
+    await loadCompaniesRegistry();
+    alert(`Imported ${res.imported} companies from ${name}.`);
+  } catch (err) {
+    alert("Import failed: " + err.message);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = "Import All";
+    }
+  }
+}
+
+async function buildPackFromInput() {
+  const name = qs("#packBuildName").value.trim();
+  const region = qs("#packBuildRegion").value.trim();
+  const description = qs("#packBuildDescription").value.trim();
+  const text = qs("#packBuildInput").value.trim();
+  if (!name || !text) {
+    alert("Pack name and company input are required.");
+    return;
+  }
+
+  const btn = qs("#btnBuildPack");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Building…';
+  try {
+    const inputs = parseBatchDiscoverLines(text);
+    await POST("/api/packs/build", {
+      name,
+      region: region || null,
+      description: description || null,
+      inputs,
+    });
+    qs("#packBuildInput").value = "";
+    await loadPacksList();
+    alert(`Pack "${name}" built successfully.`);
+  } catch (err) {
+    alert("Build pack failed: " + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = "Build Pack";
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1633,9 +1898,14 @@ async function boot() {
   qs("#discoverUrlInput").addEventListener("keydown", (e) => {
     if (e.key === "Enter") detectCompanyAts();
   });
+  qs("#btnBatchDiscover").addEventListener("click", runBatchDiscover);
+  qs("#btnVerifyStale").addEventListener("click", verifyStaleCompanies);
   ["#companyAtsFilter", "#companyPreferredFilter"].forEach((sel) => {
     qs(sel).addEventListener("change", renderCompaniesTable);
   });
+
+  // Packs tab
+  qs("#btnBuildPack").addEventListener("click", buildPackFromInput);
 
   // Discover
   qs("#btnDiscover").addEventListener("click", runDiscover);
