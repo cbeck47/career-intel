@@ -1,4 +1,4 @@
-const { detectAts, probeAtsApi, computeConfidence } = require("./detectAts");
+const { detectAllAts, computeConfidence } = require("./detectAts");
 const { resolveCareersCandidates } = require("./websiteResolver");
 const { interpretEvidence } = require("./aiEvidenceInterpreter");
 const { normalizeCompany, normalizeJobSource, nowIso } = require("../registry/companies");
@@ -11,22 +11,22 @@ function buildInputLabel(input) {
   return "unknown";
 }
 
-function detectionToSource(detection, careersUrl) {
+function detectionToSource(detection, fallbackCareersUrl) {
   return normalizeJobSource({
     ats_type: detection.ats_type,
     ats_identifier: detection.ats_identifier,
-    careers_url: careersUrl ?? detection.careers_url ?? null,
+    careers_url: detection.source_url ?? detection.careers_url ?? fallbackCareersUrl ?? null,
     application_url: detection.application_url ?? null,
     platform: detection.platform ?? null,
     confidence: detection.confidence ?? null,
     probe_ok: detection.probe_ok === true,
     last_verified: nowIso(),
-    enabled: isSupportedAts(detection.ats_type),
-    notes: isSupportedAts(detection.ats_type) ? "" : "Detected but fetch adapter unavailable",
+    enabled: detection.enabled ?? (isSupportedAts(detection.ats_type) && detection.probe_ok === true),
+    notes: detection.notes ?? "",
   });
 }
 
-function buildEvidencePacket(input, candidates, detections) {
+function buildEvidencePacket(input, candidates, detections, multiResults = []) {
   const best = detections[0] ?? null;
   const probeResults = {};
   const candidateIdentifiers = [];
@@ -37,18 +37,25 @@ function buildEvidencePacket(input, candidates, detections) {
     const key = `${item.ats_type}:${item.ats_identifier ?? "?"}`;
     probeResults[key] = item.probe_ok === true;
     if (item.ats_identifier) candidateIdentifiers.push(item.ats_identifier);
-    if (item.careers_url) atsUrls.push(item.careers_url);
+    if (item.source_url ?? item.careers_url) atsUrls.push(item.source_url ?? item.careers_url);
   }
 
   const types = new Set(detections.map((item) => item.ats_type).filter(Boolean));
   if (types.size > 1) conflicting.push(`Multiple ATS types: ${[...types].join(", ")}`);
+  if (detections.length > 1) {
+    conflicting.push(`${detections.length} job boards detected`);
+  }
+
+  const embeddedLinks = multiResults.flatMap((result) =>
+    (result.sources ?? []).map((source) => source.source_url).filter(Boolean)
+  );
 
   return {
     company_name: input.name ?? best?.name ?? null,
     input_url: buildInputLabel(input),
-    final_url: best?.careers_url ?? input.careers_url ?? input.website ?? null,
-    page_title: best?.page_title ?? null,
-    candidate_careers_links: candidates.slice(0, 10),
+    final_url: best?.careers_url ?? best?.source_url ?? input.careers_url ?? input.website ?? null,
+    page_title: best?.page_title ?? multiResults[0]?.page_title ?? null,
+    candidate_careers_links: [...new Set([...candidates, ...embeddedLinks])].slice(0, 10),
     ats_urls: [...new Set(atsUrls)].slice(0, 10),
     script_domains: [],
     candidate_identifiers: [...new Set(candidateIdentifiers)].slice(0, 10),
@@ -58,16 +65,46 @@ function buildEvidencePacket(input, candidates, detections) {
 }
 
 function resolveStatus(confidence, sources) {
-  if (confidence >= 85 && sources.length > 0) return "resolved";
-  if (confidence >= 60) return "partial";
+  const probed = sources.filter((source) => source.probe_ok);
+  const maxConfidence = Math.max(
+    confidence,
+    ...sources.map((source) => source.confidence ?? 0),
+    0
+  );
+
+  if (maxConfidence >= 85 && probed.length > 0) return "resolved";
+  if (sources.length > 0 && (maxConfidence >= 60 || probed.length > 0)) return "partial";
   if (sources.length > 0) return "needs_review";
   return "failed";
+}
+
+function buildDetailText(sources, error) {
+  if (sources.length > 1) {
+    const ids = sources.map((source) => source.ats_identifier).filter(Boolean);
+    return `Found ${ids.join(", ")}`;
+  }
+  if (sources.length === 1) {
+    const source = sources[0];
+    if (source.probe_ok) return `Verified ${source.ats_type} board`;
+    return source.notes || `Detected ${source.ats_type}/${source.ats_identifier}`;
+  }
+  return error ?? "No ATS detected";
 }
 
 function buildRegistryEntry(input, sources, confidence, status) {
   if (!sources.length) return null;
 
   const primary = sources[0];
+  const probedCount = sources.filter((source) => source.probe_ok).length;
+  const notes = [
+    input.notes ?? "",
+    sources.length > 1
+      ? `Federated employer — ${sources.length} job boards (${probedCount} probed OK)`
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
 
   return normalizeCompany({
     name: input.name ?? "Unknown Company",
@@ -76,22 +113,20 @@ function buildRegistryEntry(input, sources, confidence, status) {
     headquarters: input.headquarters ?? null,
     ats_type: primary.ats_type,
     ats_identifier: primary.ats_identifier,
-    careers_url: primary.careers_url,
+    careers_url: primary.careers_url ?? input.careers_url ?? null,
     application_url: primary.application_url,
     platform: primary.platform,
     discovery_confidence: confidence,
     verification_status:
       status === "resolved"
         ? "verified"
-        : status === "partial"
+        : status === "partial" || status === "needs_review"
           ? "manual_review"
-          : status === "needs_review"
-            ? "manual_review"
-            : "unresolved",
+          : "unresolved",
     last_verified: nowIso(),
     preferred: true,
     enabled: sources.some((source) => source.enabled),
-    notes: input.notes ?? "",
+    notes,
     sources,
   });
 }
@@ -113,6 +148,7 @@ async function discoverCompany(input = {}, options = {}) {
       careers_url: null,
       sources: [],
       confidence: 0,
+      detail: "No careers URL candidates found",
       evidence: buildEvidencePacket(input, [], []),
       registry_entry: null,
       ai_used: false,
@@ -120,29 +156,38 @@ async function discoverCompany(input = {}, options = {}) {
     };
   }
 
+  const multiResults = [];
   const detections = [];
+
   for (const url of uniqueCandidates) {
-    const result = await detectAts(url);
-    if (result.ats_type && result.ats_type !== "unknown") {
-      detections.push({ ...result, candidate_url: url });
+    const multi = await detectAllAts(url);
+    multiResults.push({ ...multi, candidate_url: url });
+    for (const source of multi.sources ?? []) {
+      detections.push({
+        ...source,
+        candidate_url: url,
+        name: multi.name,
+        page_title: multi.page_title,
+      });
     }
-    if (result.confidence >= 85) break;
+    if (detections.some((item) => item.confidence >= 85 && item.probe_ok)) break;
   }
 
-  detections.sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0));
-
-  let sources = detections
-    .filter((item) => item.ats_identifier)
-    .map((item) => detectionToSource(item, item.candidate_url ?? item.careers_url));
+  detections.sort((a, b) => {
+    if (a.probe_ok !== b.probe_ok) return a.probe_ok ? -1 : 1;
+    return (b.confidence ?? 0) - (a.confidence ?? 0);
+  });
 
   const sourceKey = (source) => `${source.ats_type}:${source.ats_identifier.toLowerCase()}`;
   const deduped = new Map();
-  for (const source of sources) deduped.set(sourceKey(source), source);
-  sources = [...deduped.values()];
+  for (const detection of detections.filter((item) => item.ats_identifier)) {
+    deduped.set(sourceKey(detection), detectionToSource(detection, detection.candidate_url));
+  }
+  let sources = [...deduped.values()];
 
   let confidence = detections[0]?.confidence ?? 0;
   let aiUsed = false;
-  const evidence = buildEvidencePacket(input, uniqueCandidates, detections);
+  const evidence = buildEvidencePacket(input, uniqueCandidates, detections, multiResults);
 
   const evidenceHasSignals =
     evidence.candidate_careers_links.length > 0 ||
@@ -208,26 +253,35 @@ async function discoverCompany(input = {}, options = {}) {
   }
 
   const status = resolveStatus(confidence, sources);
-  const companyName = input.name ?? detections[0]?.name ?? null;
+  const companyName =
+    input.name ?? multiResults.find((item) => item.name)?.name ?? detections[0]?.name ?? null;
   const registryEntry = buildRegistryEntry(
     { ...input, name: companyName },
     sources,
     confidence,
     status
   );
+  const error = sources.length
+    ? null
+    : multiResults.find((item) => item.error)?.error ?? "ATS not detected from candidates";
 
   return {
     input: label,
     status,
     company_name: companyName,
     website: input.website ?? null,
-    careers_url: detections[0]?.careers_url ?? uniqueCandidates[0] ?? null,
+    careers_url:
+      detections[0]?.careers_url ??
+      multiResults[0]?.final_url ??
+      uniqueCandidates[0] ??
+      null,
     sources,
     confidence,
+    detail: buildDetailText(sources, error),
     evidence,
-    registry_entry: status === "resolved" ? registryEntry : registryEntry,
+    registry_entry: registryEntry,
     ai_used: aiUsed,
-    error: detections.length ? null : "ATS not detected from candidates",
+    error,
   };
 }
 

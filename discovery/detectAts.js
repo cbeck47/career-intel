@@ -34,6 +34,20 @@ function extractTenantHostFromHtml(html) {
   return null;
 }
 
+function icimsIdentifierFromHost(host) {
+  const normalized = host.toLowerCase();
+  const careersMatch = normalized.match(/^careers-([a-z0-9-]+)\.icims\.com$/);
+  if (careersMatch) return careersMatch[1];
+  const internalMatch = normalized.match(/^internal-([a-z0-9-]+)\.icims\.com$/);
+  if (internalMatch) return internalMatch[1];
+  return null;
+}
+
+function sourceKey(atsType, identifier) {
+  if (!atsType || !identifier) return null;
+  return `${atsType}:${identifier.toLowerCase()}`;
+}
+
 function detectOracleFromUrl(url) {
   const host = url.hostname.toLowerCase();
   const siteNumber = extractSiteNumberFromPath(url.pathname);
@@ -46,6 +60,7 @@ function detectOracleFromUrl(url) {
       siteNumber,
       application_url: null,
       directHostMatch: true,
+      source_url: url.toString(),
     };
   }
 
@@ -57,6 +72,7 @@ function detectOracleFromUrl(url) {
       application_url: `${url.protocol}//${url.host}`,
       directHostMatch: false,
       needsTenantFromHtml: true,
+      source_url: url.toString(),
     };
   }
 
@@ -72,96 +88,184 @@ function detectFromUrl(url) {
   if (oracle) return oracle;
 
   if (host === "careers.smartrecruiters.com" || host === "jobs.smartrecruiters.com") {
-    return { ats_type: "smartrecruiters", ats_identifier: segment, directHostMatch: true };
+    return {
+      ats_type: "smartrecruiters",
+      ats_identifier: segment,
+      directHostMatch: true,
+      source_url: url.toString(),
+    };
   }
 
   if (host === "jobs.lever.co") {
-    return { ats_type: "lever", ats_identifier: segment, directHostMatch: true };
+    return {
+      ats_type: "lever",
+      ats_identifier: segment,
+      directHostMatch: true,
+      source_url: url.toString(),
+    };
   }
 
   if (host === "jobs.ashbyhq.com") {
-    return { ats_type: "ashby", ats_identifier: segment, directHostMatch: true };
+    return {
+      ats_type: "ashby",
+      ats_identifier: segment,
+      directHostMatch: true,
+      source_url: url.toString(),
+    };
   }
 
   if (host === "boards.greenhouse.io" || host === "job-boards.greenhouse.io") {
-    return { ats_type: "greenhouse", ats_identifier: segment, directHostMatch: true };
+    return {
+      ats_type: "greenhouse",
+      ats_identifier: segment,
+      directHostMatch: true,
+      source_url: url.toString(),
+    };
   }
 
   if (host.endsWith(".myworkdayjobs.com") || host === "myworkdayjobs.com") {
     const tenant = host.replace(/\.myworkdayjobs\.com$/i, "").toLowerCase();
     const identifier =
       tenant && tenant !== "myworkdayjobs" && segment ? `${tenant}|${segment}` : segment;
-    return { ats_type: "workday", ats_identifier: identifier, directHostMatch: true };
+    return {
+      ats_type: "workday",
+      ats_identifier: identifier,
+      directHostMatch: true,
+      source_url: url.toString(),
+    };
   }
 
   if (host.includes("icims.com")) {
-    const subdomain = host.split(".")[0];
-    const identifier =
-      subdomain && subdomain !== "www" && subdomain !== "careers" ? subdomain : segment;
-    return { ats_type: "icims", ats_identifier: identifier, directHostMatch: true };
+    const icimsId = icimsIdentifierFromHost(host);
+    const identifier = icimsId ?? segment;
+    return {
+      ats_type: "icims",
+      ats_identifier: identifier,
+      directHostMatch: true,
+      source_url: `${url.protocol}//${host}`,
+    };
   }
 
   return null;
 }
 
-function detectFromHtml(html) {
-  const signals = [];
+function detectAllFromHtml(html, pageUrl = null) {
   const text = html ?? "";
+  const found = new Map();
+
+  function add(entry) {
+    if (!entry?.ats_type) return;
+    if (entry.ats_type === "oracle_recruiting_cloud") {
+      const key = entry.tenantHost && entry.siteNumber
+        ? sourceKey(entry.ats_type, formatOracleIdentifier(entry.tenantHost, entry.siteNumber))
+        : sourceKey(entry.ats_type, entry.siteNumber ?? "?");
+      if (key && !found.has(key)) found.set(key, entry);
+      return;
+    }
+    if (!entry.ats_identifier) return;
+    const key = sourceKey(entry.ats_type, entry.ats_identifier);
+    if (key && !found.has(key)) found.set(key, entry);
+  }
 
   const tenantHost = extractTenantHostFromHtml(text);
   const siteMatch = text.match(/siteNumber["\s:=]+(CX_[A-Za-z0-9_]+)/i);
   if (tenantHost && siteMatch?.[1]) {
-    return {
+    add({
       ats_type: "oracle_recruiting_cloud",
       tenantHost,
       siteNumber: siteMatch[1],
       application_url: null,
       directHostMatch: false,
-      signalCount: 2,
-    };
+      source_url: pageUrl?.toString?.() ?? null,
+    });
   }
 
-  const patterns = [
-    { ats_type: "greenhouse", regex: /boards-api\.greenhouse\.io\/v1\/boards\/([^/"'\s?]+)/i },
-    { ats_type: "greenhouse", regex: /boards\.greenhouse\.io\/([^/"'\s?]+)/i },
-    { ats_type: "lever", regex: /jobs\.lever\.co\/([^/"'\s?]+)/i },
-    { ats_type: "lever", regex: /api\.lever\.co\/v0\/postings\/([^/"'\s?]+)/i },
-    { ats_type: "ashby", regex: /jobs\.ashbyhq\.com\/([^/"'\s?]+)/i },
-    { ats_type: "ashby", regex: /api\.ashbyhq\.com\/posting-api\/job-board\/([^/"'\s?]+)/i },
-    { ats_type: "smartrecruiters", regex: /api\.smartrecruiters\.com\/v1\/companies\/([^/"'\s?]+)/i },
-    { ats_type: "smartrecruiters", regex: /careers\.smartrecruiters\.com\/([^/"'\s?]+)/i },
-    { ats_type: "workday", regex: /([a-z0-9-]+)\.myworkdayjobs\.com/i },
-    { ats_type: "icims", regex: /careers-([a-z0-9-]+)\.icims\.com/i },
-    { ats_type: "icims", regex: /icims\.com/i },
+  const scanPatterns = [
+    {
+      ats_type: "greenhouse",
+      regex: /boards-api\.greenhouse\.io\/v1\/boards\/([^/"'\s?]+)/gi,
+      build: (id) => ({
+        ats_identifier: decodeURIComponent(id),
+        source_url: `https://boards.greenhouse.io/${id}`,
+      }),
+    },
+    {
+      ats_type: "greenhouse",
+      regex: /boards\.greenhouse\.io\/([^/"'\s?]+)/gi,
+      build: (id) => ({
+        ats_identifier: decodeURIComponent(id),
+        source_url: `https://boards.greenhouse.io/${id}`,
+      }),
+    },
+    {
+      ats_type: "lever",
+      regex: /jobs\.lever\.co\/([^/"'\s?]+)/gi,
+      build: (id) => ({
+        ats_identifier: decodeURIComponent(id),
+        source_url: `https://jobs.lever.co/${id}`,
+      }),
+    },
+    {
+      ats_type: "ashby",
+      regex: /jobs\.ashbyhq\.com\/([^/"'\s?]+)/gi,
+      build: (id) => ({
+        ats_identifier: decodeURIComponent(id),
+        source_url: `https://jobs.ashbyhq.com/${id}`,
+      }),
+    },
+    {
+      ats_type: "smartrecruiters",
+      regex: /careers\.smartrecruiters\.com\/([^/"'\s?]+)/gi,
+      build: (id) => ({
+        ats_identifier: decodeURIComponent(id),
+        source_url: `https://careers.smartrecruiters.com/${id}`,
+      }),
+    },
+    {
+      ats_type: "icims",
+      regex: /careers-([a-z0-9-]+)\.icims\.com/gi,
+      build: (id) => ({
+        ats_identifier: decodeURIComponent(id),
+        source_url: `https://careers-${id}.icims.com`,
+      }),
+    },
+    {
+      ats_type: "workday",
+      regex: /https?:\/\/([a-z0-9-]+)\.myworkdayjobs\.com\/([^/"'\s?#]+)/gi,
+      build: (tenant, board) => ({
+        ats_identifier: `${tenant}|${board}`,
+        source_url: `https://${tenant}.myworkdayjobs.com/${board}`,
+      }),
+    },
   ];
 
-  for (const pattern of patterns) {
-    const match = text.match(pattern.regex);
-    if (match?.[1]) {
-      signals.push({
+  for (const pattern of scanPatterns) {
+    for (const match of text.matchAll(pattern.regex)) {
+      const built = pattern.build(match[1], match[2]);
+      add({
         ats_type: pattern.ats_type,
-        ats_identifier: decodeURIComponent(match[1]),
+        ...built,
+        directHostMatch: false,
       });
-    } else if (match && pattern.ats_type === "icims" && !match[1]) {
-      signals.push({ ats_type: "icims", ats_identifier: null });
     }
   }
 
-  if (!signals.length) return null;
+  return [...found.values()];
+}
 
-  const counts = {};
-  for (const signal of signals) {
-    counts[signal.ats_type] = (counts[signal.ats_type] ?? 0) + 1;
+function detectFromHtml(html) {
+  const all = detectAllFromHtml(html);
+  if (!all.length) return null;
+
+  const oracle = all.find((item) => item.ats_type === "oracle_recruiting_cloud");
+  if (oracle) {
+    return { ...oracle, signalCount: all.length };
   }
 
-  const topType = Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
-  const topSignals = signals.filter((s) => s.ats_type === topType && s.ats_identifier);
-  return {
-    ats_type: topType,
-    ats_identifier: topSignals[0]?.ats_identifier ?? null,
-    directHostMatch: false,
-    signalCount: signals.length,
-  };
+  const withId = all.filter((item) => item.ats_identifier);
+  if (!withId.length) return null;
+
+  return { ...withId[0], signalCount: all.length };
 }
 
 function finalizeOracleDetection(detection, html) {
@@ -183,6 +287,7 @@ function finalizeOracleDetection(detection, html) {
     tenantHost,
     ats_identifier: formatOracleIdentifier(tenantHost, siteNumber),
     platform: "Oracle Fusion HCM",
+    source_url: detection.source_url ?? `https://${tenantHost}`,
   };
 }
 
@@ -375,10 +480,53 @@ function computeConfidence({
   return Math.max(0, Math.min(100, score));
 }
 
-async function detectAts(rawUrl) {
+function buildSourceNotes(atsType, probeOk) {
+  if (!isSupportedAts(atsType)) return "Detected but fetch adapter unavailable";
+  if (probeOk) return "";
+  return "Probe failed — verify identifier manually";
+}
+
+async function finalizeAndProbeDetection(rawDetection, context) {
+  let detection = { ...rawDetection };
+  if (detection.ats_type === "oracle_recruiting_cloud") {
+    detection = finalizeOracleDetection(detection, context.html ?? "");
+  }
+  if (!detection.ats_type || !detection.ats_identifier) return null;
+
+  const probeOk = await probeAtsApi(detection.ats_type, detection.ats_identifier);
+  const confidence = computeConfidence({
+    ats_type: detection.ats_type,
+    ats_identifier: detection.ats_identifier,
+    directHostMatch: detection.directHostMatch === true,
+    probeOk,
+    pageTitle: context.pageTitle,
+    companyName: context.companyName,
+    redirectCount: context.redirectCount ?? 0,
+    signalCount: context.signalCount ?? 1,
+  });
+
+  const careersUrl = detection.source_url ?? context.finalUrl?.toString?.() ?? null;
+
+  return {
+    ats_type: detection.ats_type,
+    ats_identifier: detection.ats_identifier,
+    source_url: detection.source_url ?? careersUrl,
+    careers_url: careersUrl,
+    application_url: detection.application_url ?? null,
+    platform: detection.platform ?? null,
+    confidence,
+    probe_ok: probeOk,
+    supported: isSupportedAts(detection.ats_type),
+    enabled: isSupportedAts(detection.ats_type) && probeOk,
+    directHostMatch: detection.directHostMatch === true,
+    notes: buildSourceNotes(detection.ats_type, probeOk),
+  };
+}
+
+async function detectAllAts(rawUrl) {
   const parsed = parseUrl(rawUrl);
   if (!parsed) {
-    return { error: "Invalid URL", confidence: 0 };
+    return { error: "Invalid URL", confidence: 0, sources: [] };
   }
 
   let finalUrl = parsed;
@@ -400,85 +548,128 @@ async function detectAts(rawUrl) {
         urlHint.tenantHost ??
         (await resolveOracleTenant(parsed.hostname, urlHint.siteNumber));
       if (tenantHost) {
-        const detection = finalizeOracleDetection(
+        const probed = await finalizeAndProbeDetection(
           {
             ...urlHint,
             tenantHost,
             application_url: urlHint.application_url ?? `${parsed.protocol}//${parsed.host}`,
           },
-          ""
+          {
+            html: "",
+            pageTitle: null,
+            companyName: guessCompanyName(null, urlHint.siteNumber),
+            redirectCount: 0,
+            signalCount: 1,
+            finalUrl: parsed,
+          }
         );
-        const probeOk = await probeAtsApi(detection.ats_type, detection.ats_identifier);
-        const companyName = guessCompanyName(null, detection.ats_identifier);
-        const confidence = computeConfidence({
-          ats_type: detection.ats_type,
-          ats_identifier: detection.ats_identifier,
-          directHostMatch: false,
-          probeOk,
-          pageTitle: null,
-          companyName,
-          redirectCount: 0,
-          signalCount: 1,
-        });
         return {
-          name: companyName,
-          careers_url: parsed.toString(),
-          application_url: detection.application_url,
-          platform: detection.platform,
-          ats_type: detection.ats_type,
-          ats_identifier: detection.ats_identifier,
-          confidence,
-          supported: isSupportedAts(detection.ats_type),
-          probe_ok: probeOk,
+          input_url: parsed.toString(),
+          final_url: parsed.toString(),
           page_title: null,
+          name: guessCompanyName(null, probed?.ats_identifier),
+          sources: probed ? [probed] : [],
+          confidence: probed?.confidence ?? 0,
         };
       }
     }
-    return { error: `Could not fetch URL: ${err.message}`, confidence: 0 };
+    return { error: `Could not fetch URL: ${err.message}`, confidence: 0, sources: [] };
   }
 
-  let detection = detectFromUrl(finalUrl) ?? detectFromHtml(html);
-  if (detection?.ats_type === "oracle_recruiting_cloud") {
-    detection = finalizeOracleDetection(detection, html);
+  const pageTitle = extractPageTitle(html);
+  const rawDetections = [];
+  const urlDetection = detectFromUrl(finalUrl);
+  if (urlDetection) rawDetections.push(urlDetection);
+  rawDetections.push(...detectAllFromHtml(html, finalUrl));
+
+  const dedupedRaw = new Map();
+  for (const item of rawDetections) {
+    if (item.ats_type === "oracle_recruiting_cloud") {
+      const key = item.tenantHost && item.siteNumber
+        ? sourceKey(item.ats_type, formatOracleIdentifier(item.tenantHost, item.siteNumber))
+        : sourceKey(item.ats_type, item.siteNumber ?? "?");
+      if (key) dedupedRaw.set(key, item);
+      continue;
+    }
+    const key = sourceKey(item.ats_type, item.ats_identifier);
+    if (key) dedupedRaw.set(key, item);
   }
 
-  if (!detection) {
+  const companyName = guessCompanyName(pageTitle, [...dedupedRaw.values()][0]?.ats_identifier);
+  const signalCount = dedupedRaw.size;
+  const sources = [];
+
+  for (const raw of dedupedRaw.values()) {
+    const probed = await finalizeAndProbeDetection(raw, {
+      html,
+      pageTitle,
+      companyName,
+      redirectCount,
+      signalCount,
+      finalUrl,
+    });
+    if (probed) sources.push(probed);
+  }
+
+  sources.sort((a, b) => {
+    if (a.probe_ok !== b.probe_ok) return a.probe_ok ? -1 : 1;
+    return (b.confidence ?? 0) - (a.confidence ?? 0);
+  });
+
+  const confidence = sources[0]?.confidence ?? 0;
+
+  return {
+    input_url: parsed.toString(),
+    final_url: finalUrl.toString(),
+    page_title: pageTitle,
+    name: companyName,
+    sources,
+    confidence,
+    error: sources.length ? null : "Could not detect ATS from URL or page content",
+  };
+}
+
+async function detectAts(rawUrl) {
+  const multi = await detectAllAts(rawUrl);
+  if (multi.error && !multi.sources?.length) {
     return {
-      careers_url: finalUrl.toString(),
+      error: multi.error,
+      confidence: 0,
+      careers_url: multi.final_url ?? rawUrl,
+    };
+  }
+
+  const best = multi.sources?.[0];
+  if (!best) {
+    return {
+      careers_url: multi.final_url ?? rawUrl,
       ats_type: "unknown",
       ats_identifier: null,
       confidence: 0,
       supported: false,
-      error: "Could not detect ATS from URL or page content",
+      error: multi.error ?? "Could not detect ATS from URL or page content",
     };
   }
 
-  const pageTitle = extractPageTitle(html);
-  const companyName = guessCompanyName(pageTitle, detection.ats_identifier);
-  const probeOk = await probeAtsApi(detection.ats_type, detection.ats_identifier);
-  const confidence = computeConfidence({
-    ats_type: detection.ats_type,
-    ats_identifier: detection.ats_identifier,
-    directHostMatch: detection.directHostMatch,
-    probeOk,
-    pageTitle,
-    companyName,
-    redirectCount,
-    signalCount: detection.signalCount ?? 1,
-  });
-
   return {
-    name: companyName,
-    careers_url: finalUrl.toString(),
-    application_url: detection.application_url ?? null,
-    platform: detection.platform ?? null,
-    ats_type: detection.ats_type,
-    ats_identifier: detection.ats_identifier,
-    confidence,
-    supported: isSupportedAts(detection.ats_type),
-    probe_ok: probeOk,
-    page_title: pageTitle,
+    name: multi.name,
+    careers_url: multi.final_url ?? best.careers_url,
+    application_url: best.application_url,
+    platform: best.platform,
+    ats_type: best.ats_type,
+    ats_identifier: best.ats_identifier,
+    confidence: best.confidence,
+    supported: best.supported,
+    probe_ok: best.probe_ok,
+    page_title: multi.page_title,
+    sources: multi.sources,
   };
 }
 
-module.exports = { detectAts, probeAtsApi, computeConfidence };
+module.exports = {
+  detectAts,
+  detectAllAts,
+  detectAllFromHtml,
+  probeAtsApi,
+  computeConfidence,
+};

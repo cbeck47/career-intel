@@ -96,7 +96,25 @@ async function api(method, path, body) {
   const opts = { method, headers: { "Content-Type": "application/json" } };
   if (body) opts.body = JSON.stringify(body);
   const res = await fetch(path, opts);
-  const json = await res.json();
+  const text = await res.text();
+  let json;
+  try {
+    json = text ? JSON.parse(text) : {};
+  } catch {
+    const isHtml = /^\s*</.test(text);
+    if (isHtml) {
+      const cannotPost = text.match(/Cannot (GET|POST|PUT|DELETE) ([^<\s]+)/);
+      if (cannotPost) {
+        throw new Error(
+          `API route not found (${cannotPost[0]}). Restart Career Intel with "npm start" so the server loads the latest routes.`
+        );
+      }
+      throw new Error(
+        `Server returned HTML instead of JSON for ${path}. Restart Career Intel with "npm start".`
+      );
+    }
+    throw new Error(`Invalid JSON from ${path}: ${text.slice(0, 80)}`);
+  }
   if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
   return json;
 }
@@ -1393,6 +1411,44 @@ function confidenceClass(score) {
   return "score-low";
 }
 
+function formatSourceSummary(sources) {
+  if (!sources?.length) return "—";
+  const counts = {};
+  for (const source of sources) {
+    counts[source.ats_type] = (counts[source.ats_type] ?? 0) + 1;
+  }
+  return Object.entries(counts)
+    .map(([type, count]) => `${count} ${type}`)
+    .join(", ");
+}
+
+function formatSourceIdentifiers(sources) {
+  return sources?.map((source) => source.ats_identifier).filter(Boolean).join(", ") || "—";
+}
+
+function canAddDiscoveryResult(item) {
+  return Boolean(item.registry_entry?.sources?.length);
+}
+
+function renderDiscoveryEvidence(evidence) {
+  if (!evidence) return "<p style='color:var(--muted)'>No evidence captured.</p>";
+  const lines = [
+    evidence.final_url ? `<div><strong>Final URL:</strong> ${escHtml(evidence.final_url)}</div>` : "",
+    evidence.page_title ? `<div><strong>Page title:</strong> ${escHtml(evidence.page_title)}</div>` : "",
+    evidence.candidate_careers_links?.length
+      ? `<div><strong>Candidate links:</strong><ul style='margin:4px 0 0 16px'>${evidence.candidate_careers_links.map((url) => `<li>${escHtml(url)}</li>`).join("")}</ul></div>`
+      : "",
+    evidence.candidate_identifiers?.length
+      ? `<div><strong>Identifiers:</strong> ${escHtml(evidence.candidate_identifiers.join(", "))}</div>`
+      : "",
+    evidence.conflicting_signals?.length
+      ? `<div><strong>Signals:</strong> ${escHtml(evidence.conflicting_signals.join("; "))}</div>`
+      : "",
+    evidence.ai_error ? `<div style='color:var(--yellow)'><strong>AI:</strong> ${escHtml(evidence.ai_error)}</div>` : "",
+  ].filter(Boolean);
+  return lines.join("") || "<p style='color:var(--muted)'>No evidence captured.</p>";
+}
+
 function verificationBadge(status, lastVerified) {
   const label = status ?? "unknown";
   const tip = lastVerified
@@ -1614,23 +1670,38 @@ function renderBatchDiscoverResults(results) {
   }
 
   const resolvedCount = results.filter((item) => item.status === "resolved").length;
+  const addableCount = results.filter((item) => canAddDiscoveryResult(item)).length;
   container.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
-      <span style="font-size:13px;color:var(--muted)">${results.length} discovered · ${resolvedCount} resolved</span>
-      <button class="btn btn-primary btn-sm" id="btnAddAllResolved">Add all resolved</button>
+      <span style="font-size:13px;color:var(--muted)">${results.length} discovered · ${resolvedCount} resolved · ${addableCount} addable</span>
+      <button class="btn btn-primary btn-sm" id="btnAddAllResolved">Add all addable</button>
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Input</th><th>Company</th><th>ATS</th><th>Status</th><th>Confidence</th><th></th></tr></thead>
+        <thead><tr><th>Input</th><th>Company</th><th>Sources</th><th>Status</th><th>Confidence</th><th>Detail</th><th></th></tr></thead>
         <tbody>
-          ${results.map((item, idx) => `<tr>
-            <td style="font-size:12px">${escHtml(item.input)}</td>
+          ${results.map((item, idx) => {
+            const addable = canAddDiscoveryResult(item);
+            const detail = item.detail ?? item.error ?? "—";
+            return `<tr class="batch-result-row" data-idx="${idx}">
+            <td style="font-size:12px;max-width:220px;word-break:break-all">${escHtml(item.input)}</td>
             <td>${escHtml(item.company_name ?? "—")}</td>
-            <td>${item.sources?.[0] ? `${sourceBadge(item.sources[0].ats_type)} <code style="font-size:11px">${escHtml(item.sources[0].ats_identifier)}</code>` : "—"}</td>
+            <td style="font-size:12px">${escHtml(formatSourceSummary(item.sources))}</td>
             <td>${escHtml(item.status)}</td>
             <td>${item.confidence != null ? `<span class="score-pill ${confidenceClass(item.confidence)}">${item.confidence}%</span>` : "—"}</td>
-            <td><button class="btn btn-secondary btn-sm batch-add-company" data-idx="${idx}" ${item.registry_entry ? "" : "disabled"}>Add</button></td>
-          </tr>`).join("")}
+            <td style="font-size:12px;color:var(--muted);max-width:220px">${escHtml(detail)}</td>
+            <td style="white-space:nowrap">
+              <button class="btn btn-secondary btn-sm batch-add-company" data-idx="${idx}" ${addable ? "" : "disabled"}>Add</button>
+              <button class="btn btn-secondary btn-sm batch-toggle-evidence" data-idx="${idx}">Evidence</button>
+            </td>
+          </tr>
+          <tr class="batch-evidence-row hidden" data-evidence-idx="${idx}">
+            <td colspan="7" style="background:var(--surface2);font-size:12px">
+              ${item.sources?.length ? `<div style="margin-bottom:8px"><strong>Boards:</strong> ${escHtml(formatSourceIdentifiers(item.sources))}</div>` : ""}
+              ${renderDiscoveryEvidence(item.evidence)}
+            </td>
+          </tr>`;
+          }).join("")}
         </tbody>
       </table>
     </div>
@@ -1638,12 +1709,18 @@ function renderBatchDiscoverResults(results) {
   setHidden(container, false);
 
   qs("#btnAddAllResolved")?.addEventListener("click", async () => {
-    for (const item of results.filter((row) => row.status === "resolved" && row.registry_entry)) {
+    for (const item of results.filter((row) => canAddDiscoveryResult(row))) {
       await saveDiscoveredCompany(item);
     }
   });
   qsa(".batch-add-company", container).forEach((btn) => {
     btn.addEventListener("click", () => saveDiscoveredCompany(results[Number(btn.dataset.idx)]));
+  });
+  qsa(".batch-toggle-evidence", container).forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const row = container.querySelector(`tr[data-evidence-idx="${btn.dataset.idx}"]`);
+      if (row) row.classList.toggle("hidden");
+    });
   });
 }
 

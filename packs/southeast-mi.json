@@ -1,6 +1,6 @@
 {
   "name": "southeast-mi",
-  "description": "Southeast Michigan employers",
+  "description": "Southeast Michigan employers — OEM, defense, and health systems",
   "region": "Southeast Michigan",
   "industry": null,
   "created_at": "2026-07-03T00:00:00.000Z",
@@ -20,7 +20,7 @@
       "discovery_confidence": 100,
       "verification_status": "verified",
       "last_verified": "2026-07-03T00:00:00.000Z",
-      "notes": "Starter pack entry",
+      "notes": "Pack entry",
       "sources": [
         {
           "ats_type": "oracle_recruiting_cloud",
@@ -33,6 +33,186 @@
           "last_verified": "2026-07-03T00:00:00.000Z",
           "enabled": true,
           "notes": ""
+        }
+      ]
+    },
+    {
+      "name": "Stellantis",
+      "website": "https://www.stellantis.com/",
+      "headquarters": "Auburn Hills, MI",
+      "preferred": true,
+      "enabled": true,
+      "ats_type": "icims",
+      "ats_identifier": "stellantis",
+      "careers_url": "https://careers-stellantis.icims.com/",
+      "application_url": null,
+      "platform": "iCIMS",
+      "discovery_confidence": 100,
+      "verification_status": "verified",
+      "last_verified": "2026-07-03T00:00:00.000Z",
+      "notes": "Pack entry",
+      "sources": [
+        {
+          "ats_type": "icims",
+          "ats_identifier": "stellantis",
+          "careers_url": "https://careers-stellantis.icims.com/",
+          "application_url": null,
+          "platform": "iCIMS",
+          "confidence": 100,
+          "probe_ok": true,
+          "last_verified": "2026-07-03T00:00:00.000Z",
+          "enabled": true,
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "name": "General Dynamics Mission Systems",
+      "website": "https://gdmissionsystems.com/",
+      "headquarters": "Sterling Heights, MI",
+      "preferred": true,
+      "enabled": true,
+      "ats_type": "icims",
+      "ats_identifier": "gdms",
+      "careers_url": "https://careers-gdms.icims.com/",
+      "application_url": null,
+      "platform": "iCIMS",
+      "discovery_confidence": 100,
+      "verification_status": "verified",
+      "last_verified": "2026-07-03T00:00:00.000Z",
+      "notes": "GD business unit — pack entry",
+      "sources": [
+        {
+          "ats_type": "icims",
+          "ats_identifier": "gdms",
+          "careers_url": "https://careers-gdms.icims.com/",
+          "application_url": null,
+          "platform": "iCIMS",
+          "confidence": 100,
+          "probe_ok": true,
+          "last_verified": "2026-07-03T00:00:00.000Z",
+          "enabled": true,
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "name": "General Dynamics Bath Iron Works",
+      "website": "https://www.gdbiw.com/",
+      "headquarters": "Bath, ME",
+      "preferred": false,
+      "enabled": true,
+      "ats_type": "icims",
+      "ats_identifier": "gdbiw",
+      "careers_url": "https://careers-gdbiw.icims.com/",
+      "application_url": null,
+      "platform": "iCIMS",
+      "discovery_confidence": 100,
+      "verification_status": "verified",
+      "last_verified": "2026-07-03T00:00:00.000Z",
+      "notes": "GD business unit — pack entry",
+      "sources": [
+        {
+          "ats_type": "icims",
+          "ats_identifier": "gdbiw",
+          "careers_url": "https://careers-gdbiw.icims.com/",
+          "application_url": null,
+          "platform": "iCIMS",
+          "confidence": 100,
+          "probe_ok": true,
+          "last_verified": "2026-07-03T00:00:00.000Z",
+          "enabled": true,
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "name": "General Dynamics Electric Boat",
+      "website": "https://www.gdeb.com/",
+      "headquarters": "Groton, CT",
+      "preferred": false,
+      "enabled": true,
+      "ats_type": "icims",
+      "ats_identifier": "gdeb",
+      "careers_url": "https://careers-gdeb.icims.com/",
+      "application_url": null,
+      "platform": "iCIMS",
+      "discovery_confidence": 100,
+      "verification_status": "verified",
+      "last_verified": "2026-07-03T00:00:00.000Z",
+      "notes": "GD business unit — pack entry",
+      "sources": [
+        {
+          "ats_type": "icims",
+          "ats_identifier": "gdeb",
+          "careers_url": "https://careers-gdeb.icims.com/",
+          "application_url": null,
+          "platform": "iCIMS",
+          "confidence": 100,
+          "probe_ok": true,
+          "last_verified": "2026-07-03T00:00:00.000Z",
+          "enabled": true,
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "name": "Corewell Health",
+      "website": "https://corewellhealth.org/",
+      "headquarters": "Grand Rapids, MI",
+      "preferred": true,
+      "enabled": true,
+      "ats_type": "workday",
+      "ats_identifier": "corewellhealth|External",
+      "careers_url": "https://careers.corewellhealth.org/",
+      "application_url": null,
+      "platform": "Workday",
+      "discovery_confidence": 100,
+      "verification_status": "manual_review",
+      "last_verified": "2026-07-03T00:00:00.000Z",
+      "notes": "Pack entry — verify Workday tenant/board before sync",
+      "sources": [
+        {
+          "ats_type": "workday",
+          "ats_identifier": "corewellhealth|External",
+          "careers_url": "https://careers.corewellhealth.org/",
+          "application_url": null,
+          "platform": "Workday",
+          "confidence": 100,
+          "probe_ok": false,
+          "last_verified": "2026-07-03T00:00:00.000Z",
+          "enabled": true,
+          "notes": "Verify Workday identifier"
+        }
+      ]
+    },
+    {
+      "name": "DTE Energy",
+      "website": "https://www.dteenergy.com/",
+      "headquarters": "Detroit, MI",
+      "preferred": true,
+      "enabled": true,
+      "ats_type": "workday",
+      "ats_identifier": "dte|DTE_External",
+      "careers_url": "https://careers.dteenergy.com/",
+      "application_url": null,
+      "platform": "Workday",
+      "discovery_confidence": 100,
+      "verification_status": "manual_review",
+      "last_verified": "2026-07-03T00:00:00.000Z",
+      "notes": "Pack entry — verify Workday tenant/board before sync",
+      "sources": [
+        {
+          "ats_type": "workday",
+          "ats_identifier": "dte|DTE_External",
+          "careers_url": "https://careers.dteenergy.com/",
+          "application_url": null,
+          "platform": "Workday",
+          "confidence": 100,
+          "probe_ok": false,
+          "last_verified": "2026-07-03T00:00:00.000Z",
+          "enabled": true,
+          "notes": "Verify Workday identifier"
         }
       ]
     }
